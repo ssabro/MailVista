@@ -1,0 +1,244 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Haze Color Palette */
+    /* #0F6BAE, #248BD6, #83B8FF, #C6CDFF */
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 206 84% 37%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 233 100% 96%;
+    --secondary-foreground: 206 84% 25%;
+    --muted: 214 60% 95%;
+    --muted-foreground: 206 40% 40%;
+    --accent: 214 100% 76%;
+    --accent-foreground: 206 84% 20%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 40% 88%;
+    --input: 214 40% 88%;
+    --ring: 207 71% 49%;
+    --radius: 0.5rem;
+
+    /* Custom Haze palette colors */
+    --haze-deep: 206 84% 37%;
+    --haze-medium: 207 71% 49%;
+    --haze-light: 214 100% 76%;
+    --haze-pale: 233 100% 89%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+}
+
+#root {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Quill Editor Styles */
+.quill {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.quill .ql-container {
+  flex: 1;
+  overflow: auto;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+}
+
+.quill .ql-editor {
+  min-height: 300px;
+}
+
+.quill .ql-editor.ql-blank::before {
+  color: #9ca3af;
+  font-style: normal;
+}
+
+.quill .ql-toolbar {
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.3);
+}
+
+.quill .ql-container {
+  border: none;
+}
+
+/* Quill editor content styles */
+.ql-editor img {
+  max-width: 100%;
+  height: auto;
+}
+
+.ql-editor table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.ql-editor td,
+.ql-editor th {
+  border: 1px solid #d1d5db;
+  padding: 8px;
+}
+
+.ql-editor a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+}
+
+/* Quill 한국어 툴팁 */
+.ql-toolbar button:hover::after,
+.ql-toolbar .ql-picker:hover::after {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #333;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 100;
+}
+
+.ql-toolbar button,
+.ql-toolbar .ql-picker {
+  position: relative;
+}
+
+/* 굵게 */
+.ql-toolbar .ql-bold:hover::after {
+  content: '굵게';
+}
+/* 기울임 */
+.ql-toolbar .ql-italic:hover::after {
+  content: '기울임';
+}
+/* 밑줄 */
+.ql-toolbar .ql-underline:hover::after {
+  content: '밑줄';
+}
+/* 취소선 */
+.ql-toolbar .ql-strike:hover::after {
+  content: '취소선';
+}
+/* 글머리 기호 */
+.ql-toolbar .ql-list[value='bullet']:hover::after {
+  content: '글머리 기호';
+}
+/* 번호 매기기 */
+.ql-toolbar .ql-list[value='ordered']:hover::after {
+  content: '번호 매기기';
+}
+/* 들여쓰기 */
+.ql-toolbar .ql-indent[value='+1']:hover::after {
+  content: '들여쓰기';
+}
+/* 내어쓰기 */
+.ql-toolbar .ql-indent[value='-1']:hover::after {
+  content: '내어쓰기';
+}
+/* 링크 */
+.ql-toolbar .ql-link:hover::after {
+  content: '링크';
+}
+/* 이미지 */
+.ql-toolbar .ql-image:hover::after {
+  content: '이미지';
+}
+/* 서식 제거 */
+.ql-toolbar .ql-clean:hover::after {
+  content: '서식 제거';
+}
+
+/* 폰트 드롭다운 */
+.ql-toolbar .ql-font:hover::after {
+  content: '글꼴';
+}
+/* 크기 드롭다운 */
+.ql-toolbar .ql-size:hover::after {
+  content: '글자 크기';
+}
+/* 색상 */
+.ql-toolbar .ql-color:hover::after {
+  content: '글자색';
+}
+/* 배경색 */
+.ql-toolbar .ql-background:hover::after {
+  content: '배경색';
+}
+/* 정렬 */
+.ql-toolbar .ql-align:hover::after {
+  content: '정렬';
+}
+
+/* 크기 드롭다운 옵션 한국어 */
+.ql-snow .ql-picker.ql-size .ql-picker-label::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item::before {
+  content: '보통';
+}
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value='small']::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value='small']::before {
+  content: '작게';
+}
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value='large']::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value='large']::before {
+  content: '크게';
+}
+.ql-snow .ql-picker.ql-size .ql-picker-label[data-value='huge']::before,
+.ql-snow .ql-picker.ql-size .ql-picker-item[data-value='huge']::before {
+  content: '아주 크게';
+}
+
+/* 폰트 드롭다운 기본값 */
+.ql-snow .ql-picker.ql-font .ql-picker-label::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item::before {
+  content: '기본 글꼴';
+}
+
+/* 링크 입력창 한국어 */
+.ql-snow .ql-tooltip::before {
+  content: 'URL 입력:';
+}
+.ql-snow .ql-tooltip a.ql-action::after {
+  content: '수정';
+}
+.ql-snow .ql-tooltip a.ql-remove::before {
+  content: '삭제';
+}
+.ql-snow .ql-tooltip input[type='text'] {
+  width: 200px;
+}
+.ql-snow .ql-tooltip input[type='text']::placeholder {
+  content: '링크를 입력하세요';
+}
+
+/* 링크 툴팁 저장 버튼 */
+.ql-snow .ql-tooltip.ql-editing a.ql-action::after {
+  content: '저장';
+}

@@ -1,0 +1,179 @@
+/**
+ * 계정 저장소 - 계정 CRUD 및 비밀번호 관리
+ */
+import Store from 'electron-store'
+import { safeStorage } from 'electron'
+import type {
+  AccountConfig,
+  StoredAccount,
+  SaveAccountResult,
+  DeleteAccountResult,
+  SetDefaultResult
+} from './types'
+import {
+  isOAuthAccount,
+  getXOAuth2Token,
+  getOAuthProvider,
+  getOAuthServerConfig
+} from '../oauth-service'
+
+// electron-store는 ESM default export를 사용
+const ElectronStore = (Store as unknown as { default: typeof Store }).default || Store
+
+const store = new ElectronStore<{ accounts: StoredAccount[] }>({
+  name: 'accounts',
+  defaults: {
+    accounts: []
+  }
+})
+
+/**
+ * 계정 저장 (신규 또는 업데이트)
+ */
+export function saveAccount(config: AccountConfig): SaveAccountResult {
+  try {
+    // 비밀번호 암호화
+    let encryptedPassword: string
+    if (safeStorage.isEncryptionAvailable()) {
+      const encrypted = safeStorage.encryptString(config.password)
+      encryptedPassword = encrypted.toString('base64')
+    } else {
+      // 암호화 불가능한 경우 base64로만 인코딩 (보안 취약)
+      encryptedPassword = Buffer.from(config.password).toString('base64')
+    }
+
+    const storedAccount: StoredAccount = {
+      email: config.email,
+      encryptedPassword,
+      name: config.name,
+      protocol: config.protocol,
+      incoming: config.incoming,
+      outgoing: config.outgoing
+    }
+
+    const accounts = store.get('accounts', [])
+    // 이미 존재하는 계정이면 업데이트
+    const existingIndex = accounts.findIndex((a) => a.email === config.email)
+    if (existingIndex >= 0) {
+      accounts[existingIndex] = storedAccount
+    } else {
+      accounts.push(storedAccount)
+    }
+    store.set('accounts', accounts)
+
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to save account' }
+  }
+}
+
+/**
+ * 모든 계정 조회 (암호화된 상태)
+ */
+export function getAccounts(): StoredAccount[] {
+  return store.get('accounts', [])
+}
+
+/**
+ * 비밀번호 복호화하여 계정 정보 조회
+ */
+export function getAccountWithPassword(email: string): AccountConfig | null {
+  const accounts = store.get('accounts', [])
+  const account = accounts.find((a) => a.email === email)
+
+  if (!account) return null
+
+  let password: string
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const encrypted = Buffer.from(account.encryptedPassword, 'base64')
+      password = safeStorage.decryptString(encrypted)
+    } else {
+      password = Buffer.from(account.encryptedPassword, 'base64').toString()
+    }
+  } catch {
+    password = ''
+  }
+
+  return {
+    ...account,
+    password
+  }
+}
+
+/**
+ * OAuth 지원 비동기 버전 - OAuth 계정인 경우 XOAUTH2 토큰을 포함
+ */
+export async function getAccountWithPasswordAsync(email: string): Promise<AccountConfig | null> {
+  const account = getAccountWithPassword(email)
+  if (!account) return null
+
+  // OAuth 계정인지 확인
+  if (isOAuthAccount(email)) {
+    const provider = getOAuthProvider(email)
+    if (provider) {
+      // OAuth 서버 설정 적용
+      const serverConfig = getOAuthServerConfig(provider)
+      account.incoming = serverConfig.imap
+      account.outgoing = serverConfig.smtp
+
+      // XOAUTH2 토큰 가져오기
+      const tokenResult = await getXOAuth2Token(email)
+      if (tokenResult.success && tokenResult.token) {
+        account.useOAuth = true
+        account.xoauth2Token = tokenResult.token // IMAP용
+        account.accessToken = tokenResult.accessToken // SMTP용
+        // OAuth의 경우 password는 사용되지 않음
+        account.password = ''
+      }
+    }
+  }
+
+  return account
+}
+
+/**
+ * 계정 삭제
+ */
+export function deleteAccount(email: string): DeleteAccountResult {
+  const accounts = store.get('accounts', [])
+  const filtered = accounts.filter((a) => a.email !== email)
+  store.set('accounts', filtered)
+  return { success: true }
+}
+
+/**
+ * 기본 계정 설정
+ */
+export function setDefaultAccount(email: string): SetDefaultResult {
+  try {
+    const accounts = store.get('accounts', [])
+    const updated = accounts.map((a) => ({
+      ...a,
+      isDefault: a.email === email
+    }))
+    store.set('accounts', updated)
+    return { success: true }
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to set default account'
+    }
+  }
+}
+
+/**
+ * 계정 존재 여부 확인
+ */
+export function hasAccounts(): boolean {
+  const accounts = store.get('accounts', [])
+  return accounts.length > 0
+}
+
+/**
+ * 기본 계정 조회
+ */
+export function getDefaultAccount(): StoredAccount | null {
+  const accounts = store.get('accounts', [])
+  return accounts.find((a) => a.isDefault) || accounts[0] || null
+}
