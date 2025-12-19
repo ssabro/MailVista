@@ -850,6 +850,7 @@ function App(): React.JSX.Element {
 
   // 상세 검색 핸들러
   const handleDetailedSearch = (params: DetailedSearchParams) => {
+    console.log('[handleDetailedSearch] Called with params:', params)
     setDetailedSearchParams(params)
     setSearchQuery('')
     setIsSearching(false)
@@ -3846,6 +3847,7 @@ function App(): React.JSX.Element {
                 onClick={() => {
                   handleDetailedSearch(viewDetailedSearch)
                   setViewDetailedSearchOpen(false)
+                  setCurrentView('list') // 검색 결과를 보기 위해 목록 모드로 전환
                 }}
               >
                 <Search className="h-4 w-4 mr-1" />
