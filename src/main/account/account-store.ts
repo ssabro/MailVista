@@ -32,15 +32,18 @@ const store = new ElectronStore<{ accounts: StoredAccount[] }>({
  */
 export function saveAccount(config: AccountConfig): SaveAccountResult {
   try {
-    // 비밀번호 암호화
-    let encryptedPassword: string
-    if (safeStorage.isEncryptionAvailable()) {
-      const encrypted = safeStorage.encryptString(config.password)
-      encryptedPassword = encrypted.toString('base64')
-    } else {
-      // 암호화 불가능한 경우 base64로만 인코딩 (보안 취약)
-      encryptedPassword = Buffer.from(config.password).toString('base64')
+    // 암호화 가용성 확인 - 불가능하면 저장 거부
+    if (!safeStorage.isEncryptionAvailable()) {
+      return {
+        success: false,
+        error:
+          'ENCRYPTION_UNAVAILABLE: 시스템에서 암호화를 사용할 수 없습니다. 보안상의 이유로 계정을 저장할 수 없습니다.'
+      }
     }
+
+    // 비밀번호 암호화
+    const encrypted = safeStorage.encryptString(config.password)
+    const encryptedPassword = encrypted.toString('base64')
 
     const storedAccount: StoredAccount = {
       email: config.email,

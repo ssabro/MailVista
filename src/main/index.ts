@@ -211,6 +211,7 @@ import {
   getCloudCredentials,
   needsCloudUpload,
   formatFileSize,
+  canUseGoogleDrive,
   CloudProvider
 } from './cloud-storage-service'
 import {
@@ -239,9 +240,10 @@ import {
   getEmailRepository,
   getFolderRepository,
   getOperationWorker,
-  getBodyStorage
+  getBodyStorage,
+  EmailRecord
 } from './storage'
-import { debugString } from './utils/encoding'
+// debugString removed - no longer needed after logging refactor
 import { simpleParser } from 'mailparser'
 import { initAutoUpdater, registerUpdateHandlers } from './auto-updater'
 
@@ -253,6 +255,264 @@ let tray: Tray | null = null
 
 // 앱 종료 중 플래그 (트레이 최소화와 실제 종료 구분용)
 let isAppQuitting = false
+
+// ========== UI 이벤트 브로드캐스터 ==========
+// 백엔드에서 데이터 변경 시 렌더러에 알림
+
+/**
+ * 렌더러에 이벤트 브로드캐스트
+ */
+function broadcastToRenderer(channel: string, data: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data)
+  }
+}
+
+/**
+ * 폴더 카운트 변경 알림
+ * @param accountEmail 계정 이메일
+ * @param folderPath 변경된 폴더 경로 (optional, 없으면 전체 폴더)
+ */
+function broadcastFolderCountsUpdated(accountEmail: string, folderPath?: string): void {
+  broadcastToRenderer('folder-counts-updated', { accountEmail, folderPath })
+}
+
+/**
+ * 이메일 목록 변경 알림
+ * @param accountEmail 계정 이메일
+ * @param folderPath 변경된 폴더 경로
+ * @param changeType 변경 유형
+ */
+function broadcastEmailsUpdated(
+  accountEmail: string,
+  folderPath: string,
+  changeType: 'added' | 'deleted' | 'moved' | 'flags_changed'
+): void {
+  broadcastToRenderer('emails-updated', { accountEmail, folderPath, changeType })
+}
+
+/**
+ * 새 메일 알림 브로드캐스트 (계정 정보 포함)
+ */
+function broadcastNewMailNotification(data: {
+  accountEmail: string
+  newCount: number
+  emails: { uid: number; from: string; subject: string; date: Date }[]
+}): void {
+  broadcastToRenderer('new-mail-received', data)
+}
+
+// ========== 백그라운드 동기화 매니저 ==========
+// 모든 계정에 대해 주기적으로 새 메일 확인
+
+class BackgroundSyncManager {
+  private static instance: BackgroundSyncManager | null = null
+  private syncTimer: ReturnType<typeof setInterval> | null = null
+  private isSyncing = false
+  private syncIntervalMs = 60000 // 기본 1분
+
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  private constructor() {}
+
+  static getInstance(): BackgroundSyncManager {
+    if (!BackgroundSyncManager.instance) {
+      BackgroundSyncManager.instance = new BackgroundSyncManager()
+    }
+    return BackgroundSyncManager.instance
+  }
+
+  /**
+   * 백그라운드 동기화 시작
+   */
+  start(): void {
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer)
+    }
+
+    // 초기 동기화는 앱 시작 후 10초 뒤에 실행 (UI 로딩 완료 후)
+    setTimeout(() => {
+      this.syncAllAccounts()
+    }, 10000)
+
+    // 주기적 동기화
+    this.syncTimer = setInterval(() => {
+      this.syncAllAccounts()
+    }, this.syncIntervalMs)
+
+    logger.info(LogCategory.SYNC, 'Background sync manager started', {
+      intervalMs: this.syncIntervalMs
+    })
+  }
+
+  /**
+   * 백그라운드 동기화 중지
+   */
+  stop(): void {
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer)
+      this.syncTimer = null
+    }
+    logger.info(LogCategory.SYNC, 'Background sync manager stopped')
+  }
+
+  /**
+   * 동기화 간격 설정
+   */
+  setSyncInterval(intervalMs: number): void {
+    this.syncIntervalMs = intervalMs
+    // 타이머가 실행 중이면 재시작
+    if (this.syncTimer) {
+      this.stop()
+      this.start()
+    }
+  }
+
+  /**
+   * 모든 계정 동기화
+   */
+  private async syncAllAccounts(): Promise<void> {
+    if (this.isSyncing) {
+      return
+    }
+
+    this.isSyncing = true
+
+    try {
+      const accounts = getAccounts()
+
+      for (const account of accounts) {
+        try {
+          await this.syncAccount(account.email)
+        } catch (error) {
+          logger.error(LogCategory.SYNC, `Background sync failed for ${account.email}`, {
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      }
+    } finally {
+      this.isSyncing = false
+    }
+  }
+
+  /**
+   * 단일 계정 동기화
+   */
+  private async syncAccount(accountEmail: string): Promise<void> {
+    try {
+      // 스팸 필터 먼저 적용
+      await applySpamFilter(accountEmail)
+
+      // 새 메일 확인 (INBOX)
+      const result = await checkNewEmails(accountEmail, 'INBOX')
+
+      if (result.success && result.newCount > 0) {
+        // UI에 알림 이벤트 전송
+        broadcastFolderCountsUpdated(accountEmail, 'INBOX')
+        broadcastEmailsUpdated(accountEmail, 'INBOX', 'added')
+
+        // 새 메일 알림 브로드캐스트 (렌더러에서 알림 표시)
+        broadcastNewMailNotification({
+          accountEmail,
+          newCount: result.newCount,
+          emails: result.emails
+        })
+
+        logger.info(LogCategory.SYNC, `New emails received for ${accountEmail}`, {
+          count: result.newCount
+        })
+      }
+
+      // 로컬 DB에 메일이 없는 폴더 자동 동기화
+      await this.syncEmptyFolders(accountEmail)
+    } catch (error) {
+      logger.error(LogCategory.SYNC, `Sync error for ${accountEmail}`, {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  /**
+   * 로컬 DB에 메일이 없는 폴더들을 서버에서 동기화
+   */
+  private async syncEmptyFolders(accountEmail: string): Promise<void> {
+    try {
+      const folderRepository = getFolderRepository()
+      const emailRepository = getEmailRepository()
+
+      // 계정 ID 조회
+      const accountId = folderRepository.getAccountIdByEmail(accountEmail)
+      if (!accountId) {
+        return
+      }
+
+      // 모든 폴더 조회
+      const folders = folderRepository.getByAccountId(accountId)
+
+      // 선택 불가능한 컨테이너 폴더 패턴 (Gmail 등)
+      const containerFolderPatterns = [
+        /^\[Gmail\]$/i,
+        /^\[Google Mail\]$/i,
+        /^INBOX$/i // INBOX는 별도로 처리되므로 여기서 스킵
+      ]
+
+      for (const folder of folders) {
+        // 컨테이너 폴더는 스킵 (선택 불가능한 폴더)
+        const isContainerFolder = containerFolderPatterns.some((pattern) =>
+          pattern.test(folder.path)
+        )
+        if (isContainerFolder) {
+          logger.debug(LogCategory.SYNC, `Skipping container folder`, {
+            folderPath: folder.path
+          })
+          continue
+        }
+
+        // 로컬 DB에서 해당 폴더의 메일 수 확인
+        const localCount = emailRepository.getCountExcludeDeleted(folder.id)
+
+        // 로컬에 메일이 없으면 서버에서 동기화
+        if (localCount === 0) {
+          logger.info(LogCategory.SYNC, `Empty folder detected, syncing from server`, {
+            accountEmail,
+            folderPath: folder.path
+          })
+
+          try {
+            // 서버에서 메일 가져오기 (최대 50개)
+            const result = await getEmails(accountEmail, folder.path, { start: 1, limit: 50 })
+
+            if (result.success && result.emails && result.emails.length > 0) {
+              logger.info(LogCategory.SYNC, `Synced empty folder from server`, {
+                accountEmail,
+                folderPath: folder.path,
+                emailCount: result.emails.length
+              })
+
+              // UI에 알림 (폴더 카운트 업데이트)
+              broadcastFolderCountsUpdated(accountEmail, folder.path)
+            }
+          } catch (folderError) {
+            logger.error(LogCategory.SYNC, `Failed to sync empty folder`, {
+              accountEmail,
+              folderPath: folder.path,
+              error: folderError instanceof Error ? folderError.message : String(folderError)
+            })
+          }
+        }
+      }
+    } catch (error) {
+      logger.error(LogCategory.SYNC, `Failed to check empty folders`, {
+        accountEmail,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+}
+
+// 백그라운드 동기화 매니저 인스턴스 가져오기
+function getBackgroundSyncManager(): BackgroundSyncManager {
+  return BackgroundSyncManager.getInstance()
+}
 
 // 시스템 트레이 초기화
 function initializeTray(): void {
@@ -332,6 +592,22 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  // CSP(Content Security Policy) 헤더 설정 - XSS 공격 방지
+  window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          is.dev
+            ? // 개발 모드: HMR, DevTools 허용
+              "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss: https:;"
+            : // 프로덕션 모드: 엄격한 CSP
+              "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:;"
+        ]
+      }
+    })
+  })
+
   window.on('ready-to-show', () => {
     window.show()
     // 개발 모드에서는 개발자 도구 자동 열기
@@ -374,10 +650,10 @@ process.on('uncaughtException', (error) => {
     error.message.includes('ECONNREFUSED') ||
     error.message.includes('socket hang up')
   ) {
-    console.error('[Network Error - Recovered]', error.message)
+    logger.warn(LogCategory.NETWORK, 'Network error recovered', { message: error.message })
     return
   }
-  console.error('[Uncaught Exception]', error)
+  logger.error(LogCategory.ERROR, 'Uncaught exception (fatal)', { error: error.message, stack: error.stack })
 })
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -394,10 +670,10 @@ process.on('unhandledRejection', (reason, promise) => {
     errorMessage.includes('ECONNREFUSED') ||
     errorMessage.includes('socket hang up')
   ) {
-    console.error('[Network Error - Recovered]', errorMessage)
+    logger.warn(LogCategory.NETWORK, 'Network error recovered (rejection)', { message: errorMessage })
     return
   }
-  console.error('[Unhandled Rejection]', reason)
+  logger.error(LogCategory.ERROR, 'Unhandled rejection (fatal)', { reason: errorMessage })
 })
 
 // This method will be called when Electron has finished
@@ -422,7 +698,7 @@ app.whenReady().then(() => {
   })
 
   // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
+  ipcMain.on('ping', () => logger.debug(LogCategory.IPC, 'Ping received, sending pong'))
 
   // E2E Encryption handlers
   registerE2EHandlers()
@@ -435,30 +711,44 @@ app.whenReady().then(() => {
 
   // Account management IPC handlers
   ipcMain.handle('test-mail-connection', async (_event, config) => {
-    return await testMailConnection(config)
+    logger.info(LogCategory.ACCOUNT, 'Testing mail connection', { email: config?.email })
+    const result = await testMailConnection(config)
+    logger.info(LogCategory.ACCOUNT, 'Connection test result', { success: result?.success })
+    return result
   })
 
   ipcMain.handle('save-account', async (_event, config) => {
-    return saveAccount(config)
+    logger.info(LogCategory.ACCOUNT, 'Saving account', { email: config?.email })
+    const result = saveAccount(config)
+    logger.info(LogCategory.ACCOUNT, 'Account save result', { success: result?.success })
+    return result
   })
 
   ipcMain.handle('get-accounts', async () => {
-    return getAccounts()
+    logger.debug(LogCategory.ACCOUNT, 'Getting all accounts')
+    const accounts = getAccounts()
+    logger.debug(LogCategory.ACCOUNT, 'Retrieved accounts', { count: accounts?.length || 0 })
+    return accounts
   })
 
   ipcMain.handle('get-account-with-password', async (_event, email: string) => {
+    logger.debug(LogCategory.ACCOUNT, 'Getting account with password', { email })
     return getAccountWithPassword(email)
   })
 
   ipcMain.handle('delete-account', async (_event, email: string) => {
+    logger.info(LogCategory.ACCOUNT, 'Deleting account', { email })
     if (!isValidEmail(email)) {
       logValidationFailure('delete-account', 'email', email)
       return { success: false, error: 'Invalid email format' }
     }
-    return deleteAccount(email)
+    const result = deleteAccount(email)
+    logger.info(LogCategory.ACCOUNT, 'Account delete result', { email, success: result?.success })
+    return result
   })
 
   ipcMain.handle('set-default-account', async (_event, email: string) => {
+    logger.info(LogCategory.ACCOUNT, 'Setting default account', { email })
     if (!isValidEmail(email)) {
       logValidationFailure('set-default-account', 'email', email)
       return { success: false, error: 'Invalid email format' }
@@ -467,29 +757,34 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('has-accounts', async () => {
+    logger.debug(LogCategory.ACCOUNT, 'Checking if has accounts')
     return hasAccounts()
   })
 
   // Email fetching IPC handlers
   ipcMain.handle('get-folders', async (_event, email: string) => {
-    return await getFolders(email)
+    logger.info(LogCategory.FOLDER, 'Fetching folders from server', { email })
+    const result = await getFolders(email)
+    logger.info(LogCategory.FOLDER, 'Folders fetched', { email, success: result?.success })
+    return result
   })
 
   // Local-First: 로컬 DB에서 폴더 목록 조회
   ipcMain.handle('get-folders-local', async (_event, email: string) => {
+    logger.debug(LogCategory.FOLDER, 'Getting folders from local DB', { email })
     try {
       const folderRepository = getFolderRepository()
       const accountId = folderRepository.getAccountIdByEmail(email)
 
       if (!accountId) {
-        console.log(`[get-folders-local] Account not found for ${email}`)
+        logger.warn(LogCategory.FOLDER, 'Account not found for local folders', { email })
         return { success: false, folders: [], error: 'Account not found' }
       }
 
       const folderRecords = folderRepository.getByAccountId(accountId)
 
       if (folderRecords.length === 0) {
-        console.log(`[get-folders-local] No folders in local DB for ${email}`)
+        logger.warn(LogCategory.FOLDER, 'No folders in local DB', { email })
         return { success: false, folders: [], error: 'No folders in local DB' }
       }
 
@@ -538,20 +833,22 @@ app.whenReady().then(() => {
         }
       }
 
-      console.log(`[get-folders-local] Returning ${folderRecords.length} folders from local DB`)
+      logger.debug(LogCategory.FOLDER, 'Returning folders from local DB', { email, count: folderRecords.length })
       return { success: true, folders: rootFolders }
     } catch (error) {
-      console.error('[get-folders-local] Error:', error)
+      logger.error(LogCategory.FOLDER, 'Error getting local folders', { email, error: String(error) })
       return { success: false, folders: [], error: String(error) }
     }
   })
 
   ipcMain.handle('get-folder-info', async (_event, email: string, folderPath: string) => {
+    logger.debug(LogCategory.FOLDER, 'Getting folder info from server', { email, folderPath })
     return await getFolderInfo(email, folderPath)
   })
 
   // Local-First: 로컬 DB에서 폴더 정보 조회
   ipcMain.handle('get-folder-info-local', async (_event, email: string, folderPath: string) => {
+    logger.debug(LogCategory.FOLDER, 'Getting folder info from local DB', { email, folderPath })
     try {
       const emailRepository = getEmailRepository()
       const folderRepository = getFolderRepository()
@@ -559,7 +856,7 @@ app.whenReady().then(() => {
       // 폴더 ID 조회 (이메일 주소로 조회)
       const folder = folderRepository.getByEmailAndPath(email, folderPath)
       if (!folder) {
-        console.log(`[get-folder-info-local] Folder not found: ${folderPath} for ${email}`)
+        logger.warn(LogCategory.FOLDER, 'Folder not found in local DB', { email, folderPath })
         return { success: false, error: 'Folder not found', total: 0, unseen: 0 }
       }
 
@@ -567,11 +864,43 @@ app.whenReady().then(() => {
       const total = emailRepository.getCountExcludeDeleted(folder.id)
       const unseen = emailRepository.getUnreadCountExcludeDeleted(folder.id)
 
-      console.log(`[get-folder-info-local] ${folderPath}: total=${total}, unseen=${unseen}`)
+      logger.debug(LogCategory.FOLDER, 'Local folder info', { folderPath, total, unseen })
       return { success: true, total, unseen }
     } catch (error) {
-      console.error('[get-folder-info-local] Error:', error)
+      logger.error(LogCategory.FOLDER, 'Error getting local folder info', { email, folderPath, error: String(error) })
       return { success: false, error: String(error), total: 0, unseen: 0 }
+    }
+  })
+
+  // Local-First: 계정의 모든 폴더에 대한 카운트를 로컬 DB에서 조회
+  ipcMain.handle('get-all-folder-counts-local', async (_event, email: string) => {
+    logger.debug(LogCategory.FOLDER, 'Getting all folder counts from local DB', { email })
+    try {
+      const emailRepository = getEmailRepository()
+      const folderRepository = getFolderRepository()
+
+      // 계정 ID 조회
+      const accountId = folderRepository.getAccountIdByEmail(email)
+      if (!accountId) {
+        logger.warn(LogCategory.FOLDER, 'Account not found for folder counts', { email })
+        return { success: false, error: 'Account not found', counts: {} }
+      }
+
+      // 계정의 모든 폴더 조회
+      const folders = folderRepository.getByAccountId(accountId)
+      const counts: Record<string, { total: number; unseen: number }> = {}
+
+      for (const folder of folders) {
+        const total = emailRepository.getCountExcludeDeleted(folder.id)
+        const unseen = emailRepository.getUnreadCountExcludeDeleted(folder.id)
+        counts[folder.path] = { total, unseen }
+      }
+
+      logger.debug(LogCategory.FOLDER, 'Retrieved all folder counts', { email, folderCount: Object.keys(counts).length })
+      return { success: true, counts }
+    } catch (error) {
+      logger.error(LogCategory.FOLDER, 'Error getting all folder counts', { email, error: String(error) })
+      return { success: false, error: String(error), counts: {} }
     }
   })
 
@@ -606,7 +935,7 @@ app.whenReady().then(() => {
         // 폴더 ID 조회 (이메일 주소로 조회)
         const folder = folderRepository.getByEmailAndPath(email, folderPath)
         if (!folder) {
-          console.log(`[get-emails-local] Folder not found: ${folderPath} for ${email}`)
+          logger.debug(LogCategory.FOLDER, 'Folder not found in local DB', { folderPath, email })
           return { success: false, error: 'Folder not found', emails: [], total: 0 }
         }
 
@@ -640,18 +969,89 @@ app.whenReady().then(() => {
 
         // 디버깅: 첫 번째 이메일의 flags 확인
         if (emails.length > 0 && unreadOnly) {
-          console.log(
-            `[get-emails-local] unreadOnly=${unreadOnly}, first email flags:`,
-            emails[0].flags
-          )
-          console.log(`[get-emails-local] first email raw flags from DB:`, emailRecords[0].flags)
+          logger.debug(LogCategory.MAIL_FETCH, 'Unread filter applied', {
+            unreadOnly,
+            firstEmailFlags: emails[0].flags,
+            rawFlags: emailRecords[0].flags
+          })
         }
-        console.log(
-          `[get-emails-local] Returning ${emails.length} emails from local DB (total: ${total})`
-        )
+        logger.info(LogCategory.MAIL_FETCH, 'Retrieved emails from local DB', {
+          count: emails.length,
+          total,
+          folderPath
+        })
         return { success: true, emails, total }
       } catch (error) {
-        console.error('[get-emails-local] Error:', error)
+        logger.error(LogCategory.MAIL_FETCH, 'Failed to get emails from local DB', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return { success: false, error: String(error), emails: [], total: 0 }
+      }
+    }
+  )
+
+  // Local-First: 전체메일함 - 모든 폴더에서 메일 조회
+  ipcMain.handle(
+    'get-all-emails-local',
+    async (
+      _event,
+      email: string,
+      options?: { start?: number; limit?: number; unreadOnly?: boolean }
+    ) => {
+      try {
+        const { start = 1, limit = 20, unreadOnly = false } = options || {}
+        const offset = start - 1
+
+        const emailRepository = getEmailRepository()
+        const folderRepository = getFolderRepository()
+
+        // 계정 ID 조회
+        const accountId = folderRepository.getAccountIdByEmail(email)
+        if (!accountId) {
+          logger.warn(LogCategory.MAIL_FETCH, 'Account not found for all emails', { email })
+          return { success: false, error: 'Account not found', emails: [], total: 0 }
+        }
+
+        // 모든 폴더에서 메일 조회
+        const emailRecords = emailRepository.getAllByAccountIdExcludeDeleted(accountId, {
+          offset,
+          limit,
+          unreadOnly
+        })
+
+        // 전체 개수
+        const total = unreadOnly
+          ? emailRepository.getAllUnreadCountByAccountIdExcludeDeleted(accountId)
+          : emailRepository.getAllCountByAccountIdExcludeDeleted(accountId)
+
+        // EmailRecord를 EmailHeader 형식으로 변환
+        const emails = emailRecords.map((record) => ({
+          uid: record.uid,
+          messageId: record.message_id,
+          subject: record.subject,
+          from: record.from_address
+            ? [{ name: record.from_name || '', address: record.from_address }]
+            : [],
+          to: JSON.parse(record.to_addresses || '[]'),
+          cc: JSON.parse(record.cc_addresses || '[]'),
+          date: record.date,
+          flags: JSON.parse(record.flags || '[]'),
+          hasAttachment: record.has_attachment === 1,
+          size: record.size || 0,
+          folderId: record.folder_id, // 폴더 ID
+          folder: record.folder_path // 실제 폴더 경로 (가상 폴더에서 필수)
+        }))
+
+        logger.info(LogCategory.MAIL_FETCH, 'Retrieved all emails from local DB', {
+          count: emails.length,
+          total,
+          email
+        })
+        return { success: true, emails, total }
+      } catch (error) {
+        logger.error(LogCategory.MAIL_FETCH, 'Failed to get all emails from local DB', {
+          error: error instanceof Error ? error.message : String(error)
+        })
         return { success: false, error: String(error), emails: [], total: 0 }
       }
     }
@@ -660,7 +1060,53 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'get-email-content',
     async (_event, email: string, folderPath: string, uid: number) => {
-      return await getEmailContent(email, folderPath, uid)
+      // 가상 폴더 처리 (ALL_MAIL, UNREAD 등은 실제 IMAP 폴더가 아님)
+      const virtualFolders = ['ALL_MAIL', 'UNREAD', 'STARRED', 'ATTACHMENTS']
+      let actualFolderPath = folderPath
+
+      if (virtualFolders.includes(folderPath)) {
+        const folderRepository = getFolderRepository()
+        const emailRepository = getEmailRepository()
+
+        const accountId = folderRepository.getAccountIdByEmail(email)
+        if (accountId) {
+          const emailRecord = emailRepository.getByUidAcrossAccount(accountId, uid)
+          if (emailRecord) {
+            const actualFolder = folderRepository.getById(emailRecord.folder_id)
+            if (actualFolder) {
+              actualFolderPath = actualFolder.path
+              logger.info(LogCategory.MAIL, 'Virtual folder resolved for IMAP content fetch', {
+                virtualFolder: folderPath,
+                actualFolder: actualFolderPath,
+                uid
+              })
+            } else {
+              logger.error(LogCategory.MAIL, 'Could not resolve actual folder for email', {
+                virtualFolder: folderPath,
+                uid,
+                folderId: emailRecord.folder_id
+              })
+              return { success: false, error: 'Could not resolve actual folder' }
+            }
+          } else {
+            logger.error(LogCategory.MAIL, 'Email not found in local DB for virtual folder lookup', {
+              virtualFolder: folderPath,
+              uid,
+              accountId
+            })
+            return { success: false, error: 'Email not found in local database' }
+          }
+        } else {
+          logger.error(LogCategory.MAIL, 'Account not found for virtual folder lookup', {
+            email,
+            virtualFolder: folderPath,
+            uid
+          })
+          return { success: false, error: 'Account not found' }
+        }
+      }
+
+      return await getEmailContent(email, actualFolderPath, uid)
     }
   )
 
@@ -673,30 +1119,53 @@ app.whenReady().then(() => {
         const folderRepository = getFolderRepository()
         const bodyStorage = getBodyStorage()
 
-        // 폴더 ID 조회 (이메일 주소로 조회)
-        const folder = folderRepository.getByEmailAndPath(email, folderPath)
-        if (!folder) {
-          console.log(`[get-email-content-local] Folder not found: ${folderPath} for ${email}`)
-          return { success: false, error: 'Folder not found' }
+        // 가상 폴더 처리 (ALL_MAIL, UNREAD 등은 실제 IMAP 폴더가 아님)
+        const virtualFolders = ['ALL_MAIL', 'UNREAD', 'STARRED', 'ATTACHMENTS']
+        let emailRecord: EmailRecord | null = null
+        let actualFolderPath = folderPath
+
+        if (virtualFolders.includes(folderPath)) {
+          // 가상 폴더인 경우, UID로 계정 전체에서 이메일 조회
+          const accountId = folderRepository.getAccountIdByEmail(email)
+          if (accountId) {
+            emailRecord = emailRepository.getByUidAcrossAccount(accountId, uid)
+            if (emailRecord) {
+              const actualFolder = folderRepository.getById(emailRecord.folder_id)
+              if (actualFolder) {
+                actualFolderPath = actualFolder.path
+                logger.debug(LogCategory.CACHE, 'Virtual folder resolved for content lookup', {
+                  virtualFolder: folderPath,
+                  actualFolder: actualFolderPath,
+                  uid
+                })
+              }
+            }
+          }
+        } else {
+          // 일반 폴더인 경우
+          const folder = folderRepository.getByEmailAndPath(email, folderPath)
+          if (!folder) {
+            logger.warn(LogCategory.CACHE, 'Folder not found for email content lookup', { folderPath, email, uid })
+            return { success: false, error: 'Folder not found' }
+          }
+          emailRecord = emailRepository.getByUid(folder.id, uid)
         }
 
-        // 이메일 레코드 조회
-        const emailRecord = emailRepository.getByUid(folder.id, uid)
         if (!emailRecord) {
-          console.log(`[get-email-content-local] Email not found: uid=${uid}`)
+          logger.warn(LogCategory.CACHE, 'Email not found in local DB', { uid, folderPath, actualFolderPath })
           return { success: false, error: 'Email not found' }
         }
 
         // body_path가 없으면 캐시되지 않은 것
         if (!emailRecord.body_path) {
-          console.log(`[get-email-content-local] Body not cached for uid=${uid}`)
+          logger.debug(LogCategory.CACHE, 'Email body not cached', { uid })
           return { success: false, error: 'Body not cached' }
         }
 
         // 로컬 캐시에서 본문 가져오기
         const emlBuffer = await bodyStorage.getBodyBufferByPath(emailRecord.body_path)
         if (!emlBuffer) {
-          console.log(`[get-email-content-local] Body file not found: ${emailRecord.body_path}`)
+          logger.warn(LogCategory.CACHE, 'Body file not found on disk', { bodyPath: emailRecord.body_path })
           return { success: false, error: 'Body file not found' }
         }
 
@@ -737,10 +1206,12 @@ app.whenReady().then(() => {
           }))
         }
 
-        console.log(`[get-email-content-local] Loaded from cache: uid=${uid}`)
+        logger.info(LogCategory.CACHE, 'Email content loaded from cache', { uid })
         return { success: true, email: emailFull }
       } catch (error) {
-        console.error('[get-email-content-local] Error:', error)
+        logger.error(LogCategory.CACHE, 'Failed to load email content from cache', {
+          error: error instanceof Error ? error.message : String(error)
+        })
         return { success: false, error: String(error) }
       }
     }
@@ -766,16 +1237,40 @@ app.whenReady().then(() => {
       flags: string[],
       add: boolean
     ) => {
+      // 가상 폴더 처리 (ALL_MAIL, UNREAD 등은 실제 IMAP 폴더가 아님)
+      const virtualFolders = ['ALL_MAIL', 'UNREAD', 'STARRED', 'ATTACHMENTS']
+      let actualFolderPath = folderPath
+
       try {
         const folderRepo = getFolderRepository()
         const emailRepo = getEmailRepository()
         const operationQueue = getOperationQueue()
 
-        // 폴더 조회
-        const folder = folderRepo.getByEmailAndPath(email, folderPath)
+        let folder = folderRepo.getByEmailAndPath(email, folderPath)
+
+        if (virtualFolders.includes(folderPath) || !folder) {
+          // 가상 폴더이거나 폴더가 없으면, UID로 실제 폴더 찾기
+          const accountId = folderRepo.getAccountIdByEmail(email)
+          if (accountId) {
+            const emailRecord = emailRepo.getByUidAcrossAccount(accountId, uid)
+            if (emailRecord) {
+              const actualFolder = folderRepo.getById(emailRecord.folder_id)
+              if (actualFolder) {
+                actualFolderPath = actualFolder.path
+                folder = actualFolder
+                logger.debug(LogCategory.MAIL, 'Virtual folder resolved to actual folder', {
+                  virtualFolder: folderPath,
+                  actualFolder: actualFolderPath,
+                  uid
+                })
+              }
+            }
+          }
+        }
+
         if (!folder) {
-          // 폴더가 로컬 DB에 없으면 기존 방식 사용 (fallback)
-          return await setEmailFlags(email, folderPath, uid, flags, add)
+          // 폴더가 여전히 없으면 기존 방식 사용 (fallback)
+          return await setEmailFlags(email, actualFolderPath, uid, flags, add)
         }
 
         // 원본 플래그 저장 (롤백용)
@@ -796,15 +1291,23 @@ app.whenReady().then(() => {
           folderRepo.incrementUnreadCount(folder.id, add ? -1 : 1)
         }
 
-        // 작업 큐에 추가
+        // 작업 큐에 추가 (실제 폴더 경로 사용)
         operationQueue.enqueue({
           accountEmail: email,
           operationType: add ? 'flag_add' : 'flag_remove',
-          folderPath: folderPath,
+          folderPath: actualFolderPath,
           uids: [uid],
           flags: flags,
           originalData: { originalFlags }
         })
+
+        // UI에 변경 알림 (실제 폴더와 원래 요청 폴더 모두 업데이트)
+        broadcastFolderCountsUpdated(email, actualFolderPath)
+        broadcastEmailsUpdated(email, actualFolderPath, 'flags_changed')
+        if (folderPath !== actualFolderPath) {
+          // 가상 폴더에서 요청한 경우 가상 폴더도 업데이트
+          broadcastEmailsUpdated(email, folderPath, 'flags_changed')
+        }
 
         return { success: true, queued: true }
       } catch (error) {
@@ -812,7 +1315,7 @@ app.whenReady().then(() => {
           error: error instanceof Error ? error.message : String(error)
         })
         // 실패 시 기존 방식 fallback
-        return await setEmailFlags(email, folderPath, uid, flags, add)
+        return await setEmailFlags(email, actualFolderPath, uid, flags, add)
       }
     }
   )
@@ -820,16 +1323,40 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'delete-email',
     async (_event, email: string, folderPath: string, uid: number, permanent?: boolean) => {
+      // 가상 폴더 처리 (ALL_MAIL, UNREAD 등은 실제 IMAP 폴더가 아님)
+      const virtualFolders = ['ALL_MAIL', 'UNREAD', 'STARRED', 'ATTACHMENTS']
+      let actualFolderPath = folderPath
+
       try {
         const folderRepo = getFolderRepository()
         const emailRepo = getEmailRepository()
         const operationQueue = getOperationQueue()
 
-        // 폴더 조회
-        const folder = folderRepo.getByEmailAndPath(email, folderPath)
+        let folder = folderRepo.getByEmailAndPath(email, folderPath)
+
+        if (virtualFolders.includes(folderPath) || !folder) {
+          // 가상 폴더이거나 폴더가 없으면, UID로 실제 폴더 찾기
+          const accountId = folderRepo.getAccountIdByEmail(email)
+          if (accountId) {
+            const emailRecord = emailRepo.getByUidAcrossAccount(accountId, uid)
+            if (emailRecord) {
+              const actualFolder = folderRepo.getById(emailRecord.folder_id)
+              if (actualFolder) {
+                actualFolderPath = actualFolder.path
+                folder = actualFolder
+                logger.debug(LogCategory.MAIL, 'Virtual folder resolved for delete', {
+                  virtualFolder: folderPath,
+                  actualFolder: actualFolderPath,
+                  uid
+                })
+              }
+            }
+          }
+        }
+
         if (!folder) {
-          // 폴더가 로컬 DB에 없으면 기존 방식 사용 (fallback)
-          return await deleteEmail(email, folderPath, uid, permanent)
+          // 폴더가 여전히 없으면 기존 방식 사용 (fallback)
+          return await deleteEmail(email, actualFolderPath, uid, permanent)
         }
 
         // 로컬 DB 즉시 삭제 표시
@@ -838,13 +1365,20 @@ app.whenReady().then(() => {
         // 폴더 카운트 업데이트
         folderRepo.recalculateCounts(folder.id)
 
-        // 작업 큐에 추가
+        // 작업 큐에 추가 (실제 폴더 경로 사용)
         operationQueue.enqueue({
           accountEmail: email,
           operationType: permanent ? 'delete_permanent' : 'delete_trash',
-          folderPath: folderPath,
+          folderPath: actualFolderPath,
           uids: [uid]
         })
+
+        // UI에 변경 알림
+        broadcastFolderCountsUpdated(email, actualFolderPath)
+        broadcastEmailsUpdated(email, actualFolderPath, 'deleted')
+        if (folderPath !== actualFolderPath) {
+          broadcastEmailsUpdated(email, folderPath, 'deleted')
+        }
 
         return { success: true, queued: true }
       } catch (error) {
@@ -852,7 +1386,7 @@ app.whenReady().then(() => {
           error: error instanceof Error ? error.message : String(error)
         })
         // 실패 시 기존 방식 fallback
-        return await deleteEmail(email, folderPath, uid, permanent)
+        return await deleteEmail(email, actualFolderPath, uid, permanent)
       }
     }
   )
@@ -860,18 +1394,42 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'move-email',
     async (_event, email: string, fromFolder: string, toFolder: string, uid: number) => {
+      // 가상 폴더 처리 (ALL_MAIL, UNREAD 등은 실제 IMAP 폴더가 아님)
+      const virtualFolders = ['ALL_MAIL', 'UNREAD', 'STARRED', 'ATTACHMENTS']
+      let actualFromFolder = fromFolder
+
       try {
         const folderRepo = getFolderRepository()
         const emailRepo = getEmailRepository()
         const operationQueue = getOperationQueue()
 
         // 폴더 조회
-        const fromFolderRecord = folderRepo.getByEmailAndPath(email, fromFolder)
+        let fromFolderRecord = folderRepo.getByEmailAndPath(email, fromFolder)
         const toFolderRecord = folderRepo.getByEmailAndPath(email, toFolder)
+
+        if (virtualFolders.includes(fromFolder) || !fromFolderRecord) {
+          // 가상 폴더이거나 폴더가 없으면, UID로 실제 폴더 찾기
+          const accountId = folderRepo.getAccountIdByEmail(email)
+          if (accountId) {
+            const emailRecord = emailRepo.getByUidAcrossAccount(accountId, uid)
+            if (emailRecord) {
+              const actualFolder = folderRepo.getById(emailRecord.folder_id)
+              if (actualFolder) {
+                actualFromFolder = actualFolder.path
+                fromFolderRecord = actualFolder
+                logger.debug(LogCategory.MAIL, 'Virtual folder resolved for move', {
+                  virtualFolder: fromFolder,
+                  actualFolder: actualFromFolder,
+                  uid
+                })
+              }
+            }
+          }
+        }
 
         if (!fromFolderRecord || !toFolderRecord) {
           // 폴더가 로컬 DB에 없으면 기존 방식 사용 (fallback)
-          return await moveEmail(email, fromFolder, toFolder, uid)
+          return await moveEmail(email, actualFromFolder, toFolder, uid)
         }
 
         // 원본 이메일 정보 저장 (롤백용)
@@ -891,15 +1449,23 @@ app.whenReady().then(() => {
         folderRepo.recalculateCounts(fromFolderRecord.id)
         folderRepo.recalculateCounts(toFolderRecord.id)
 
-        // 작업 큐에 추가
+        // 작업 큐에 추가 (실제 폴더 경로 사용)
         operationQueue.enqueue({
           accountEmail: email,
           operationType: 'move',
-          folderPath: fromFolder,
+          folderPath: actualFromFolder,
           targetFolder: toFolder,
           uids: [uid],
           originalData: originalData
         })
+
+        // UI에 변경 알림 (양쪽 폴더)
+        broadcastFolderCountsUpdated(email)
+        broadcastEmailsUpdated(email, actualFromFolder, 'moved')
+        broadcastEmailsUpdated(email, toFolder, 'added')
+        if (fromFolder !== actualFromFolder) {
+          broadcastEmailsUpdated(email, fromFolder, 'moved')
+        }
 
         return { success: true, queued: true }
       } catch (error) {
@@ -907,7 +1473,7 @@ app.whenReady().then(() => {
           error: error instanceof Error ? error.message : String(error)
         })
         // 실패 시 기존 방식 fallback
-        return await moveEmail(email, fromFolder, toFolder, uid)
+        return await moveEmail(email, actualFromFolder, toFolder, uid)
       }
     }
   )
@@ -935,6 +1501,89 @@ app.whenReady().then(() => {
         const folderRepo = getFolderRepository()
         const emailRepo = getEmailRepository()
         const operationQueue = getOperationQueue()
+
+        // 가상 폴더 처리 (ALL_MAIL, UNREAD 등은 실제 IMAP 폴더가 아님)
+        const virtualFolders = ['ALL_MAIL', 'UNREAD', 'STARRED', 'ATTACHMENTS']
+        // Gmail의 "All Mail" 폴더도 가상 폴더로 처리 (직접 삭제 불가, 실제 폴더에서 삭제해야 함)
+        const gmailAllMailPatterns = [
+          /^\[Gmail\]\/All Mail$/i,
+          /^\[Gmail\]\/전체보관함$/,
+          /^\[Gmail\]\/모든 메일$/,
+          /^\[Google Mail\]\/All Mail$/i,
+          /^\[Google Mail\]\/전체보관함$/,
+          /^\[Google Mail\]\/모든 메일$/
+        ]
+        const isGmailAllMail = gmailAllMailPatterns.some((pattern) => pattern.test(folderPath))
+        if (virtualFolders.includes(folderPath) || isGmailAllMail) {
+          logger.info(LogCategory.MAIL_DELETE, 'Deleting from virtual folder, looking up actual folders', {
+            virtualFolder: folderPath,
+            uidCount: uids.length
+          })
+
+          // 계정 ID 조회
+          const accountId = folderRepo.getAccountIdByEmail(email)
+          if (!accountId) {
+            return { success: false, error: 'Account not found' }
+          }
+
+          // 각 UID의 실제 폴더를 찾아서 폴더별로 그룹화
+          const emailsByFolder = new Map<string, { folderPath: string; uids: number[] }>()
+
+          for (const uid of uids) {
+            // 모든 폴더에서 해당 UID를 가진 이메일 찾기
+            const emailRecord = emailRepo.getByUidAcrossAccount(accountId, uid)
+            if (emailRecord) {
+              const folderId = emailRecord.folder_id
+              if (!emailsByFolder.has(folderId)) {
+                const folderRecord = folderRepo.getById(folderId)
+                if (folderRecord) {
+                  emailsByFolder.set(folderId, { folderPath: folderRecord.path, uids: [] })
+                }
+              }
+              emailsByFolder.get(folderId)?.uids.push(uid)
+            }
+          }
+
+          // 각 폴더별로 삭제 처리
+          let totalDeleted = 0
+          for (const [folderId, { folderPath: actualFolderPath, uids: folderUids }] of emailsByFolder) {
+            logger.debug(LogCategory.MAIL_DELETE, 'Deleting from actual folder', {
+              folderId,
+              folderPath: actualFolderPath,
+              uidCount: folderUids.length
+            })
+
+            // 서버 UID만 필터링
+            const serverUids = folderUids.filter((uid) => uid > 0)
+            const localTempUids = folderUids.filter((uid) => uid < 0)
+
+            // 로컬 DB에서 삭제 표시
+            if (serverUids.length > 0) {
+              emailRepo.markAsDeleted(folderId, serverUids)
+              operationQueue.enqueue({
+                accountEmail: email,
+                operationType: permanent ? 'delete_permanent' : 'delete_trash',
+                folderPath: actualFolderPath,
+                uids: serverUids
+              })
+            }
+
+            if (localTempUids.length > 0) {
+              emailRepo.markAsDeleted(folderId, localTempUids)
+            }
+
+            folderRepo.recalculateCounts(folderId)
+            broadcastFolderCountsUpdated(email, actualFolderPath)
+            broadcastEmailsUpdated(email, actualFolderPath, 'deleted')
+
+            totalDeleted += folderUids.length
+          }
+
+          // 가상 폴더 UI 업데이트
+          broadcastEmailsUpdated(email, folderPath, 'deleted')
+
+          return { success: true, queued: true, count: totalDeleted }
+        }
 
         // 폴더 조회
         const folder = folderRepo.getByEmailAndPath(email, folderPath)
@@ -969,17 +1618,30 @@ app.whenReady().then(() => {
         if (localTempUids.length > 0) {
           // 임시 UID를 가진 이메일은 아직 서버에 없으므로 로컬에서만 삭제
           emailRepo.markAsDeleted(folder.id, localTempUids)
-          console.log(`[delete-bulk-emails] Deleted ${localTempUids.length} local temp emails (negative UIDs)`)
+          logger.debug(LogCategory.MAIL_DELETE, 'Deleted local temp emails (negative UIDs)', {
+            count: localTempUids.length
+          })
         }
 
         // 폴더 카운트 업데이트
         folderRepo.recalculateCounts(folder.id)
+
+        // UI에 변경 알림
+        broadcastFolderCountsUpdated(email, folderPath)
+        broadcastEmailsUpdated(email, folderPath, 'deleted')
 
         return { success: true, queued: serverUids.length > 0, count: uids.length }
       } catch (error) {
         logger.error(LogCategory.ERROR, 'Local-First bulk delete operation failed', {
           error: error instanceof Error ? error.message : String(error)
         })
+
+        // 가상 폴더는 IMAP fallback 불가
+        const virtualFoldersFallback = ['ALL_MAIL', 'UNREAD', 'STARRED', 'ATTACHMENTS']
+        if (virtualFoldersFallback.includes(folderPath)) {
+          return { success: false, error: error instanceof Error ? error.message : String(error) }
+        }
+
         // 실패 시 기존 방식 fallback (양수 UID만)
         const serverUids = uids.filter((uid) => uid > 0)
         if (serverUids.length === 0) {
@@ -994,9 +1656,11 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'move-bulk-emails',
     async (_event, email: string, fromFolder: string, toFolder: string, uids: number[]) => {
-      // 디버그: IPC로 수신한 폴더 경로 값 확인
-      console.log(`[move-bulk-emails] Received - fromFolder: "${fromFolder}", toFolder: "${toFolder}"`)
-      console.log('[move-bulk-emails] toFolder debug:', debugString(toFolder))
+      logger.debug(LogCategory.MAIL_MOVE, 'Bulk move request received', {
+        fromFolder,
+        toFolder,
+        uidCount: uids.length
+      })
 
       try {
         const folderRepo = getFolderRepository()
@@ -1006,20 +1670,25 @@ app.whenReady().then(() => {
         // 폴더 조회
         const fromFolderRecord = folderRepo.getByEmailAndPath(email, fromFolder)
         const toFolderRecord = folderRepo.getByEmailAndPath(email, toFolder)
-        console.log(`[move-bulk-emails] Folder lookup - from: ${fromFolderRecord?.id || 'null'}, to: ${toFolderRecord?.id || 'null'}`)
+        logger.debug(LogCategory.MAIL_MOVE, 'Folder lookup result', {
+          fromId: fromFolderRecord?.id || null,
+          toId: toFolderRecord?.id || null
+        })
 
         // SQLite에 저장된 폴더 목록도 확인
         if (!toFolderRecord) {
           const accountId = folderRepo.getAccountIdByEmail(email)
           if (accountId) {
             const allFolders = folderRepo.getByAccountId(accountId)
-            console.log(`[move-bulk-emails] Available folders in DB:`, allFolders.map(f => ({ name: f.name, path: f.path })))
+            logger.debug(LogCategory.MAIL_MOVE, 'Target folder not found, available folders', {
+              folders: allFolders.map(f => ({ name: f.name, path: f.path }))
+            })
           }
         }
 
         if (!fromFolderRecord || !toFolderRecord) {
           // 폴더가 로컬 DB에 없으면 기존 방식 사용 (fallback)
-          console.log(`[move-bulk-emails] Falling back to direct IMAP move`)
+          logger.info(LogCategory.MAIL_MOVE, 'Falling back to direct IMAP move')
           return await moveBulkEmails(email, fromFolder, toFolder, uids)
         }
 
@@ -1047,6 +1716,11 @@ app.whenReady().then(() => {
           uids: uids,
           originalData: originalData
         })
+
+        // UI에 변경 알림 (양쪽 폴더)
+        broadcastFolderCountsUpdated(email)
+        broadcastEmailsUpdated(email, fromFolder, 'moved')
+        broadcastEmailsUpdated(email, toFolder, 'added')
 
         return { success: true, queued: true, count: uids.length }
       } catch (error) {
@@ -1177,6 +1851,20 @@ app.whenReady().then(() => {
     return resetAppSettings(accountEmail)
   })
 
+  // 백그라운드 동기화 간격 설정
+  ipcMain.handle('set-background-sync-interval', async (_event, intervalMs: number) => {
+    try {
+      const syncManager = getBackgroundSyncManager()
+      syncManager.setSyncInterval(intervalMs)
+      return { success: true }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
   // 외부 URL 열기 (보안: http/https만 허용)
   ipcMain.handle('open-external', async (_event, url: string) => {
     try {
@@ -1198,28 +1886,27 @@ app.whenReady().then(() => {
       await shell.openExternal(url)
       return { success: true }
     } catch (error) {
-      console.error('[Main] Failed to open external URL:', error)
+      logger.error(LogCategory.SECURITY, 'Failed to open external URL', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      })
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
 
   // Mail filter IPC handlers (계정별 분리)
   ipcMain.handle('get-mail-filters', async (_event, accountEmail: string) => {
-    console.log('[IPC:get-mail-filters] accountEmail:', accountEmail)
+    logger.debug(LogCategory.FILTER, 'Getting mail filters', { accountEmail })
     const result = getMailFilters(accountEmail)
-    console.log('[IPC:get-mail-filters] result count:', result.length)
+    logger.debug(LogCategory.FILTER, 'Retrieved mail filters', { count: result.length })
     return result
   })
 
   ipcMain.handle(
     'add-mail-filter',
     async (_event, accountEmail: string, filter: Omit<MailFilter, 'id' | 'createdAt'>) => {
-      console.log('[IPC:add-mail-filter] === START ===')
-      console.log('[IPC:add-mail-filter] accountEmail:', accountEmail)
-      console.log('[IPC:add-mail-filter] filter:', JSON.stringify(filter, null, 2))
+      logger.info(LogCategory.FILTER, 'Adding mail filter', { accountEmail, filterName: filter.name })
       const result = addMailFilter(accountEmail, filter)
-      console.log('[IPC:add-mail-filter] result:', JSON.stringify(result, null, 2))
-      console.log('[IPC:add-mail-filter] === END ===')
+      logger.info(LogCategory.FILTER, 'Mail filter added', { success: result.success, filterId: result.filter?.id })
       return result
     }
   )
@@ -1315,7 +2002,15 @@ app.whenReady().then(() => {
 
   // 새 메일 체크 (폴링용)
   ipcMain.handle('check-new-emails', async (_event, email: string, folderPath?: string) => {
-    return await checkNewEmails(email, folderPath)
+    const result = await checkNewEmails(email, folderPath)
+    // 새 메일이 있으면 UI에 알림
+    if (result.success && result.newCount && result.newCount > 0) {
+      broadcastFolderCountsUpdated(email, folderPath)
+      if (folderPath) {
+        broadcastEmailsUpdated(email, folderPath, 'added')
+      }
+    }
+    return result
   })
 
   // 폴더 비우기 (휴지통, 스팸메일함 등)
@@ -1328,7 +2023,13 @@ app.whenReady().then(() => {
       logValidationFailure('empty-folder', 'folderPath', folderPath)
       return { success: false, error: 'Invalid folder path' }
     }
-    return await emptyFolder(email, folderPath)
+    const result = await emptyFolder(email, folderPath)
+    // 성공 시 UI에 알림
+    if (result.success) {
+      broadcastFolderCountsUpdated(email, folderPath)
+      broadcastEmailsUpdated(email, folderPath, 'deleted')
+    }
+    return result
   })
 
   // 캐시 관리
@@ -1622,6 +2323,11 @@ app.whenReady().then(() => {
   // 클라우드 서비스 연결 상태 확인
   ipcMain.handle('is-cloud-provider-connected', async (_event, provider: CloudProvider) => {
     return isCloudProviderConnected(provider)
+  })
+
+  // Gmail OAuth 계정으로 Google Drive 사용 가능 여부 확인
+  ipcMain.handle('can-use-google-drive', async (_event, accountEmail: string) => {
+    return canUseGoogleDrive(accountEmail)
   })
 
   // 클라우드 서비스 자격증명 조회
@@ -1965,6 +2671,32 @@ app.whenReady().then(() => {
     return analyzeURL(url)
   })
 
+  // URL 분석 (일반 링크 클릭 시 사용)
+  ipcMain.handle('analyze-url', (_event, url: string) => {
+    return analyzeURL(url)
+  })
+
+  // 외부 URL 열기 (브라우저에서)
+  ipcMain.handle('open-external-url', async (_event, url: string) => {
+    try {
+      // URL 유효성 검사
+      const parsedUrl = new URL(url)
+      // http와 https만 허용
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        throw new Error('Only HTTP and HTTPS URLs are allowed')
+      }
+      await shell.openExternal(url)
+      logger.info(LogCategory.SECURITY, 'Opened external URL', { url })
+      return { success: true }
+    } catch (error) {
+      logger.error(LogCategory.SECURITY, 'Failed to open external URL', {
+        url,
+        error: (error as Error).message
+      })
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
   // 이메일 인증 상태 조회 (Authentication-Results 헤더)
   ipcMain.handle(
     'get-email-auth-status',
@@ -2003,7 +2735,9 @@ app.whenReady().then(() => {
           summary
         }
       } catch (error) {
-        console.error('[Security] Failed to get email auth status:', error)
+        logger.error(LogCategory.SECURITY, 'Failed to get email auth status', {
+          error: error instanceof Error ? error.message : String(error)
+        })
         return unknownResult
       }
     }
@@ -2168,11 +2902,50 @@ app.whenReady().then(() => {
       const path = require('path')
       const fs = require('fs')
       const cacheDir = path.join(app.getPath('userData'), 'cache')
-      if (fs.existsSync(cacheDir)) {
-        fs.rmSync(cacheDir, { recursive: true, force: true })
+
+      let deletedSize = 0
+      let deletedFiles = 0
+
+      // 캐시 디렉토리 크기 및 파일 수 계산
+      const calculateDirStats = (dirPath: string): void => {
+        if (!fs.existsSync(dirPath)) return
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+        for (const entry of entries) {
+          const fullPath = path.join(dirPath, entry.name)
+          if (entry.isDirectory()) {
+            calculateDirStats(fullPath)
+          } else {
+            try {
+              const stats = fs.statSync(fullPath)
+              deletedSize += stats.size
+              deletedFiles++
+            } catch {
+              // 파일 접근 실패 시 무시
+            }
+          }
+        }
       }
-      return { success: true }
+
+      if (fs.existsSync(cacheDir)) {
+        calculateDirStats(cacheDir)
+        fs.rmSync(cacheDir, { recursive: true, force: true })
+        logger.info(LogCategory.CACHE, 'Cache directory cleared', {
+          path: cacheDir,
+          deletedFiles,
+          deletedSize
+        })
+      }
+
+      return {
+        success: true,
+        deletedFiles,
+        deletedSize,
+        message: deletedFiles > 0 ? 'cache_cleared' : 'cache_empty'
+      }
     } catch (error) {
+      logger.error(LogCategory.CACHE, 'Failed to clear cache', {
+        error: error instanceof Error ? error.message : String(error)
+      })
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
@@ -2751,6 +3524,10 @@ app.whenReady().then(() => {
   // 자동 업데이트 초기화
   initAutoUpdater(mainWindow)
 
+  // 백그라운드 동기화 매니저 시작 (모든 계정 자동 동기화)
+  const backgroundSyncManager = getBackgroundSyncManager()
+  backgroundSyncManager.start()
+
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
@@ -2777,6 +3554,16 @@ app.on('before-quit', () => {
 // 앱 종료 전 연결 풀 및 스토리지 정리
 app.on('will-quit', () => {
   logger.info(LogCategory.APP, 'Application shutting down')
+
+  // 백그라운드 동기화 매니저 중지
+  try {
+    getBackgroundSyncManager().stop()
+    logger.info(LogCategory.APP, 'Background sync manager stopped')
+  } catch (error) {
+    logger.error(LogCategory.APP, 'Failed to stop background sync manager', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
 
   // Operation Worker 중지
   try {

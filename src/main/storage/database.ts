@@ -411,8 +411,15 @@ export class StorageDatabase {
   }
 
   // 데이터베이스 정리 (VACUUM)
-  vacuum(): void {
-    this.db.exec('VACUUM')
+  vacuum(): { success: boolean; error?: string } {
+    try {
+      this.db.exec('VACUUM')
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown VACUUM error'
+      console.error('[DB] VACUUM failed:', message)
+      return { success: false, error: message }
+    }
   }
 
   // 데이터베이스 연결 종료

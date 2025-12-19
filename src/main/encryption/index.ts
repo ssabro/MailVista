@@ -4,6 +4,7 @@
  */
 
 import { ipcMain } from 'electron'
+import { logger, LogCategory } from '../logger'
 
 // PGP Service
 import {
@@ -44,6 +45,40 @@ export * from './smime-service'
 
 export type EncryptionMethod = 'none' | 'signal' | 'pgp' | 'smime'
 
+// =====================================================
+// 보안 검증 헬퍼
+// =====================================================
+
+const MAX_PASSPHRASE_LENGTH = 1024
+const MIN_PASSPHRASE_LENGTH = 8
+
+interface PassphraseValidationResult {
+  valid: boolean
+  error?: string
+}
+
+/**
+ * 패스프레이즈 검증 (보안)
+ */
+function validatePassphrase(passphrase: string): PassphraseValidationResult {
+  if (typeof passphrase !== 'string') {
+    return { valid: false, error: '패스프레이즈는 문자열이어야 합니다.' }
+  }
+
+  if (passphrase.length > MAX_PASSPHRASE_LENGTH) {
+    return {
+      valid: false,
+      error: `패스프레이즈는 ${MAX_PASSPHRASE_LENGTH}자를 초과할 수 없습니다.`
+    }
+  }
+
+  if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
+    return { valid: false, error: `패스프레이즈는 최소 ${MIN_PASSPHRASE_LENGTH}자 이상이어야 합니다.` }
+  }
+
+  return { valid: true }
+}
+
 /**
  * Register all encryption-related IPC handlers
  */
@@ -56,6 +91,13 @@ export function registerEncryptionHandlers(): void {
   ipcMain.handle(
     'pgp-generate-keys',
     async (_event, accountEmail: string, name: string, passphrase: string) => {
+      // 패스프레이즈 검증
+      const validation = validatePassphrase(passphrase)
+      if (!validation.valid) {
+        logger.warn(LogCategory.ENCRYPTION, 'Invalid passphrase', { error: validation.error })
+        return { success: false, error: validation.error }
+      }
+
       return await generatePGPKeyPair(accountEmail, name, passphrase)
     }
   )
@@ -388,5 +430,5 @@ export function registerEncryptionHandlers(): void {
     }
   )
 
-  console.log('[Encryption Service] PGP and S/MIME handlers registered')
+  logger.info(LogCategory.ENCRYPTION, 'PGP and S/MIME encryption handlers registered')
 }

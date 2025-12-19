@@ -5,6 +5,7 @@ import { getSyncQueue } from './sync-queue'
 import type { SyncQueue } from './sync-queue'
 import { getFolderRepository } from '../folder-repository'
 import { getStorageDatabase } from '../database'
+import { logger, LogCategory } from '../../logger'
 
 export interface SyncSettings {
   autoSync: boolean
@@ -108,6 +109,7 @@ export class SyncService extends EventEmitter {
     this.isPaused = false
     this.isStopping = false
 
+    logger.info(LogCategory.SYNC, 'Full sync started', { accountEmail })
     this.emit('sync-started', { accountEmail })
 
     try {
@@ -139,6 +141,10 @@ export class SyncService extends EventEmitter {
         this.startAutoSync()
       }
     } catch (error) {
+      logger.error(LogCategory.SYNC, 'Full sync failed', {
+        accountEmail,
+        error: error instanceof Error ? error.message : String(error)
+      })
       this.emit('sync-error', {
         accountEmail,
         error: error instanceof Error ? error.message : String(error)
@@ -148,6 +154,7 @@ export class SyncService extends EventEmitter {
 
   // 특정 폴더 동기화
   async syncFolder(accountEmail: string, folderPath: string): Promise<void> {
+    logger.info(LogCategory.SYNC, 'Folder sync started', { accountEmail, folderPath })
     const config = this.accountConfigs.get(accountEmail)
     if (!config) {
       throw new Error(`Account config not found for ${accountEmail}`)

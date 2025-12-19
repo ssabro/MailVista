@@ -55,6 +55,14 @@ export class SearchService {
     this.db = db || getStorageDatabase().getDatabase()
   }
 
+  /**
+   * SQL LIKE 와일드카드 이스케이프 (SQL 인젝션 방지)
+   * %, _, \ 문자를 이스케이프하여 리터럴로 처리
+   */
+  private escapeLikeWildcards(term: string): string {
+    return term.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+  }
+
   // 로컬 검색 (하이브리드: 필드별 검색은 LIKE, 일반 텍스트는 FTS)
   searchLocal(options: SearchOptions): SearchResult[] {
     const { query, limit = 50, offset = 0 } = options
@@ -132,38 +140,39 @@ export class SearchService {
     const params: (string | number)[] = []
     const conditions: string[] = []
 
-    // 필드별 조건 추가
+    // 필드별 조건 추가 (와일드카드 이스케이프 적용)
     if (parsed.fieldTerms.from?.length) {
       const fromConditions = parsed.fieldTerms.from.map(
-        () => '(e.from_name LIKE ? OR e.from_address LIKE ?)'
+        () => "(e.from_name LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\')"
       )
       conditions.push(`(${fromConditions.join(' OR ')})`)
       for (const term of parsed.fieldTerms.from) {
-        params.push(`%${term}%`, `%${term}%`)
+        const escaped = this.escapeLikeWildcards(term)
+        params.push(`%${escaped}%`, `%${escaped}%`)
       }
     }
 
     if (parsed.fieldTerms.to?.length) {
-      const toConditions = parsed.fieldTerms.to.map(() => 'e.to_addresses LIKE ?')
+      const toConditions = parsed.fieldTerms.to.map(() => "e.to_addresses LIKE ? ESCAPE '\\'")
       conditions.push(`(${toConditions.join(' OR ')})`)
       for (const term of parsed.fieldTerms.to) {
-        params.push(`%${term}%`)
+        params.push(`%${this.escapeLikeWildcards(term)}%`)
       }
     }
 
     if (parsed.fieldTerms.subject?.length) {
-      const subjectConditions = parsed.fieldTerms.subject.map(() => 'e.subject LIKE ?')
+      const subjectConditions = parsed.fieldTerms.subject.map(() => "e.subject LIKE ? ESCAPE '\\'")
       conditions.push(`(${subjectConditions.join(' OR ')})`)
       for (const term of parsed.fieldTerms.subject) {
-        params.push(`%${term}%`)
+        params.push(`%${this.escapeLikeWildcards(term)}%`)
       }
     }
 
     if (parsed.fieldTerms.body?.length) {
-      const bodyConditions = parsed.fieldTerms.body.map(() => 'e.body_text LIKE ?')
+      const bodyConditions = parsed.fieldTerms.body.map(() => "e.body_text LIKE ? ESCAPE '\\'")
       conditions.push(`(${bodyConditions.join(' OR ')})`)
       for (const term of parsed.fieldTerms.body) {
-        params.push(`%${term}%`)
+        params.push(`%${this.escapeLikeWildcards(term)}%`)
       }
     }
 
@@ -283,30 +292,31 @@ export class SearchService {
     const params: (string | number)[] = [ftsQuery]
     const conditions: string[] = []
 
-    // 필드별 LIKE 조건 추가
+    // 필드별 LIKE 조건 추가 (와일드카드 이스케이프 적용)
     if (parsed.fieldTerms.from?.length) {
       const fromConditions = parsed.fieldTerms.from.map(
-        () => '(e.from_name LIKE ? OR e.from_address LIKE ?)'
+        () => "(e.from_name LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\')"
       )
       conditions.push(`(${fromConditions.join(' OR ')})`)
       for (const term of parsed.fieldTerms.from) {
-        params.push(`%${term}%`, `%${term}%`)
+        const escaped = this.escapeLikeWildcards(term)
+        params.push(`%${escaped}%`, `%${escaped}%`)
       }
     }
 
     if (parsed.fieldTerms.to?.length) {
-      const toConditions = parsed.fieldTerms.to.map(() => 'e.to_addresses LIKE ?')
+      const toConditions = parsed.fieldTerms.to.map(() => "e.to_addresses LIKE ? ESCAPE '\\'")
       conditions.push(`(${toConditions.join(' OR ')})`)
       for (const term of parsed.fieldTerms.to) {
-        params.push(`%${term}%`)
+        params.push(`%${this.escapeLikeWildcards(term)}%`)
       }
     }
 
     if (parsed.fieldTerms.subject?.length) {
-      const subjectConditions = parsed.fieldTerms.subject.map(() => 'e.subject LIKE ?')
+      const subjectConditions = parsed.fieldTerms.subject.map(() => "e.subject LIKE ? ESCAPE '\\'")
       conditions.push(`(${subjectConditions.join(' OR ')})`)
       for (const term of parsed.fieldTerms.subject) {
-        params.push(`%${term}%`)
+        params.push(`%${this.escapeLikeWildcards(term)}%`)
       }
     }
 
@@ -438,33 +448,34 @@ export class SearchService {
     const params: (string | number)[] = []
     const conditions: string[] = []
 
-    // 일반 텍스트 검색 (LIKE)
+    // 일반 텍스트 검색 (LIKE) - 와일드카드 이스케이프 적용
     if (options.query?.trim()) {
-      const likeQuery = `%${options.query}%`
+      const escaped = this.escapeLikeWildcards(options.query)
+      const likeQuery = `%${escaped}%`
       conditions.push(
-        '(e.subject LIKE ? OR e.from_name LIKE ? OR e.from_address LIKE ? OR e.body_text LIKE ?)'
+        "(e.subject LIKE ? ESCAPE '\\' OR e.from_name LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\' OR e.body_text LIKE ? ESCAPE '\\')"
       )
       params.push(likeQuery, likeQuery, likeQuery, likeQuery)
     }
 
     // 발신자 필터
     if (options.from) {
-      const fromLike = `%${options.from}%`
-      conditions.push('(e.from_name LIKE ? OR e.from_address LIKE ?)')
+      const fromLike = `%${this.escapeLikeWildcards(options.from)}%`
+      conditions.push("(e.from_name LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\')")
       params.push(fromLike, fromLike)
     }
 
     // 수신자 필터
     if (options.to) {
-      const toLike = `%${options.to}%`
-      conditions.push('e.to_addresses LIKE ?')
+      const toLike = `%${this.escapeLikeWildcards(options.to)}%`
+      conditions.push("e.to_addresses LIKE ? ESCAPE '\\'")
       params.push(toLike)
     }
 
     // 제목 필터
     if (options.subject) {
-      conditions.push('e.subject LIKE ?')
-      params.push(`%${options.subject}%`)
+      conditions.push("e.subject LIKE ? ESCAPE '\\'")
+      params.push(`%${this.escapeLikeWildcards(options.subject)}%`)
     }
 
     // 계정 필터
@@ -560,14 +571,15 @@ export class SearchService {
     }))
   }
 
-  // 검색 제안 (자동완성)
+  // 검색 제안 (자동완성) - 와일드카드 이스케이프 적용
   getSuggestions(prefix: string, limit: number = 10): SearchSuggestion[] {
     if (!prefix.trim() || prefix.length < 2) {
       return []
     }
 
     const suggestions: SearchSuggestion[] = []
-    const prefixLike = `${prefix}%`
+    const escapedPrefix = this.escapeLikeWildcards(prefix)
+    const prefixLike = `${escapedPrefix}%`
 
     // 발신자 이름 제안
     const fromNames = this.db
@@ -575,7 +587,7 @@ export class SearchService {
         `
       SELECT from_name as value, COUNT(*) as count
       FROM emails
-      WHERE from_name LIKE ? AND from_name IS NOT NULL
+      WHERE from_name LIKE ? ESCAPE '\\' AND from_name IS NOT NULL
       GROUP BY from_name
       ORDER BY count DESC
       LIMIT ?
@@ -593,7 +605,7 @@ export class SearchService {
         `
       SELECT from_address as value, COUNT(*) as count
       FROM emails
-      WHERE from_address LIKE ? AND from_address IS NOT NULL
+      WHERE from_address LIKE ? ESCAPE '\\' AND from_address IS NOT NULL
       GROUP BY from_address
       ORDER BY count DESC
       LIMIT ?
@@ -613,13 +625,13 @@ export class SearchService {
         `
       SELECT subject as value, COUNT(*) as count
       FROM emails
-      WHERE subject LIKE ? AND subject IS NOT NULL
+      WHERE subject LIKE ? ESCAPE '\\' AND subject IS NOT NULL
       GROUP BY subject
       ORDER BY count DESC
       LIMIT ?
     `
       )
-      .all(`%${prefix}%`, Math.ceil(limit / 2)) as Array<{ value: string; count: number }>
+      .all(`%${escapedPrefix}%`, Math.ceil(limit / 2)) as Array<{ value: string; count: number }>
 
     for (const item of subjects) {
       suggestions.push({ type: 'subject', value: item.value, count: item.count })

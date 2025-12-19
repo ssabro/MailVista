@@ -76,12 +76,28 @@ class Logger {
     return new Date().toISOString()
   }
 
+  /**
+   * 로그 인젝션 방지 - 개행 문자 및 제어 문자 이스케이프
+   * 공격자가 로그에 가짜 로그 항목을 삽입하는 것을 방지
+   */
+  private sanitizeLogMessage(message: string): string {
+    return message
+      .replace(/\r\n/g, '\\r\\n')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t')
+      .replace(/[\x00-\x1F\x7F]/g, '') // 제어 문자 제거
+  }
+
   private formatLogEntry(entry: LogEntry): string {
-    let line = `[${entry.timestamp}] [${entry.level.toUpperCase()}] [${entry.category}] ${entry.message}`
+    const sanitizedMessage = this.sanitizeLogMessage(entry.message)
+    let line = `[${entry.timestamp}] [${entry.level.toUpperCase()}] [${entry.category}] ${sanitizedMessage}`
     if (entry.details !== undefined) {
       try {
         const detailsStr =
-          typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details, null, 2)
+          typeof entry.details === 'string'
+            ? this.sanitizeLogMessage(entry.details)
+            : JSON.stringify(entry.details, null, 2)
         line += `\n  Details: ${detailsStr}`
       } catch {
         line += `\n  Details: [Unable to stringify]`
@@ -137,11 +153,18 @@ class Logger {
     this.addToMemory(entry)
     this.writeToFile(entry)
 
-    // Also output to console in development
-    if (process.env.NODE_ENV === 'development') {
-      const consoleMethod =
-        level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-      consoleMethod(`[${category}] ${message}`, details || '')
+    // Always output to console for visibility
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false })
+    const levelTag = level.toUpperCase().padEnd(5)
+    const prefix = `[${timestamp}] [${levelTag}] [${category}]`
+
+    const consoleMethod =
+      level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
+
+    if (details !== undefined && details !== null && details !== '') {
+      consoleMethod(prefix, message, details)
+    } else {
+      consoleMethod(prefix, message)
     }
   }
 
@@ -331,18 +354,61 @@ export const logger = new Logger()
 
 // Export category constants for consistency
 export const LogCategory = {
+  // Core
   APP: 'App',
-  MAIL: 'Mail',
-  SYNC: 'Sync',
-  ACCOUNT: 'Account',
-  CONTACTS: 'Contacts',
-  IMPORT: 'Import',
-  EXPORT: 'Export',
-  ENCRYPTION: 'Encryption',
-  FILTER: 'Filter',
-  AI: 'AI',
   IPC: 'IPC',
   ERROR: 'Error',
+
+  // Mail operations
+  MAIL: 'Mail',
+  MAIL_SEND: 'Mail:Send',
+  MAIL_FETCH: 'Mail:Fetch',
+  MAIL_MOVE: 'Mail:Move',
+  MAIL_DELETE: 'Mail:Delete',
+  MAIL_FLAG: 'Mail:Flag',
+
+  // Sync & Connection
+  SYNC: 'Sync',
+  POOL: 'Pool',
+  CACHE: 'Cache',
+  NETWORK: 'Network',
+
+  // Account & Auth
+  ACCOUNT: 'Account',
   AUTH: 'Auth',
-  SECURITY: 'Security'
+  OAUTH: 'OAuth',
+
+  // Data management
+  CONTACTS: 'Contacts',
+  FOLDER: 'Folder',
+  SEARCH: 'Search',
+  FILTER: 'Filter',
+  TAG: 'Tag',
+  TEMPLATE: 'Template',
+  VIRTUAL_FOLDER: 'VirtualFolder',
+
+  // Storage
+  DATABASE: 'Database',
+  STORAGE: 'Storage',
+  IMPORT: 'Import',
+  EXPORT: 'Export',
+  MIGRATION: 'Migration',
+
+  // Security
+  SECURITY: 'Security',
+  ENCRYPTION: 'Encryption',
+  E2E: 'E2E',
+  PGP: 'PGP',
+  SMIME: 'S/MIME',
+
+  // Integrations
+  AI: 'AI',
+  LLM: 'LLM',
+  TRELLO: 'Trello',
+
+  // Features
+  OFFLINE: 'Offline',
+  NOTIFICATION: 'Notification',
+  ATTACHMENT: 'Attachment',
+  SIGNATURE: 'Signature'
 } as const

@@ -4,8 +4,10 @@
 
 import { logger, LogCategory } from './logger'
 
-// 이메일 주소 정규식 (기본 검증용)
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// 이메일 주소 정규식 (RFC 5322 간소화 버전)
+// 로컬 파트: 알파벳, 숫자, 특수문자(.!#$%&'*+/=?^_`{|}~-) 허용
+// 도메인: 알파벳, 숫자, 하이픈 허용, TLD는 2자 이상
+const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/
 
 // 폴더 경로 검증용 (path traversal 방지)
 const UNSAFE_PATH_PATTERNS = [
@@ -121,14 +123,18 @@ export function logValidationFailure(
 }
 
 /**
- * 입력값 새니타이즈 (기본 XSS 방지)
+ * 입력값 새니타이즈 (XSS 방지)
+ * HTML 특수문자, 백틱, 슬래시 등 잠재적 공격 문자 이스케이프
  */
 export function sanitizeString(input: string): string {
   return input
+    .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#x27;')
+    .replace(/`/g, '&#x60;')
+    .replace(/\//g, '&#x2F;')
 }
 
 // ============================================
@@ -146,6 +152,8 @@ const DANGEROUS_EXTENSIONS = new Set([
   '.scr',
   '.pif',
   '.dll',
+  '.sys',
+  '.drv',
   // 스크립트
   '.js',
   '.jse',
@@ -155,9 +163,20 @@ const DANGEROUS_EXTENSIONS = new Set([
   '.wsh',
   '.ps1',
   '.psm1',
+  '.psd1',
+  '.py',
+  '.pyc',
+  '.pyw',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.rb',
+  '.pl',
+  '.php',
   // Java
   '.jar',
   '.jnlp',
+  '.class',
   // Office 매크로
   '.docm',
   '.xlsm',
@@ -165,6 +184,8 @@ const DANGEROUS_EXTENSIONS = new Set([
   '.dotm',
   '.xltm',
   '.potm',
+  '.xlam',
+  '.ppam',
   // 기타 위험
   '.hta',
   '.cpl',
@@ -173,9 +194,20 @@ const DANGEROUS_EXTENSIONS = new Set([
   '.lnk',
   '.inf',
   '.reg',
+  '.gadget',
+  '.application',
   // 디스크 이미지 (실행파일 포함 가능)
   '.iso',
-  '.img'
+  '.img',
+  '.vhd',
+  '.vhdx',
+  // macOS 실행 파일
+  '.app',
+  '.dmg',
+  '.pkg',
+  // 압축 파일 (악성코드 포함 가능)
+  '.cab',
+  '.ace'
 ])
 
 /** 중간 위험 확장자 (Active Content 포함 가능) */

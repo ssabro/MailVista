@@ -39,7 +39,10 @@
   "notification": {
     "newMailTitle": "新着メール {{count}}件",
     "newMailBodySingle": "差出人: {{from}}\n件名: {{subject}}",
-    "newMailBodyMulti": "差出人: {{from}} 他 {{count}}名"
+    "newMailBodyMulti": "差出人: {{from}} 他 {{count}}名",
+    "newMailTitleWithAccount": "[{{account}}] 新着メール {{count}}件",
+    "newMailBodySingleWithAccount": "アカウント: {{account}}\n差出人: {{from}}\n件名: {{subject}}",
+    "newMailBodyMultiWithAccount": "アカウント: {{account}}\n差出人: {{from}} 他 {{count}}名"
   },
   "header": {
     "mail": "メール",
@@ -56,6 +59,7 @@
     "starred": "スター付き",
     "attachment": "添付",
     "inbox": "受信トレイ",
+    "allMail": "すべてのメール",
     "sent": "送信済み",
     "drafts": "下書き",
     "scheduled": "送信予約",
@@ -91,6 +95,22 @@
     "e2e": "E2E暗号化",
     "language": "言語",
     "languageDesc": "アプリケーションで使用する言語を選択します。",
+    "appearance": {
+      "title": "外観",
+      "desc": "アプリケーションのテーマと色を設定します。",
+      "themeMode": "テーマモード",
+      "light": "ライト",
+      "dark": "ダーク",
+      "system": "システム",
+      "colorPalette": "カラーパレット",
+      "palettes": {
+        "haze": "Haze",
+        "forest": "Forest",
+        "sunset": "Sunset",
+        "lavender": "Lavender",
+        "rose": "Rose"
+      }
+    },
     "loadingSettings": "設定を読み込み中...",
     "resetConfirm": "設定をデフォルトにリセットしますか？",
     "saveComplete": "保存完了",
@@ -296,6 +316,7 @@
     "saveAsEml": "EMLで保存",
     "noEmails": "メールがありません",
     "loadingEmails": "メールを読み込み中...",
+    "loadingContent": "メール内容を読み込み中...",
     "switchingAccount": "お待ちください。\nアカウントを切り替え中です。",
     "selectEmail": "メールを選択してください",
     "sending": "送信中...",
@@ -1244,7 +1265,16 @@
       "description": "アプリのログに関する設定です。",
       "level": "ログレベル",
       "retention": "ログ保存期間",
-      "days": "{{count}}日"
+      "days": "{{count}}日",
+      "openFolder": "ログフォルダを開く",
+      "export": "ログをエクスポート",
+      "clear": "ログを削除",
+      "levels": {
+        "debug": "詳細（開発者向け）",
+        "info": "通常",
+        "warn": "警告のみ",
+        "error": "エラーのみ"
+      }
     },
     "updates": {
       "title": "アップデート設定",
@@ -1257,7 +1287,9 @@
     "cache": {
       "title": "キャッシュ管理",
       "description": "アプリのキャッシュを削除してストレージ容量を確保できます。",
-      "clear": "キャッシュを削除"
+      "clear": "キャッシュを削除",
+      "empty": "削除するキャッシュがありません。",
+      "cleared": "{{files}}件のファイル（{{size}}）を削除しました"
     }
   },
   "largeFile": {
@@ -1275,7 +1307,12 @@
     "uploadFailed": "アップロード失敗: {{files}}",
     "expiresIn14Days": "リンクは14日後に期限切れになります。",
     "downloadLinks": "大容量添付ファイルのダウンロード",
+    "download": "ダウンロード",
+    "fileCount": "{{count}}件のファイル",
+    "linkExpiryNote": "※ リンクは一定期間後に期限切れになる場合があります。",
     "transferShNote": "Transfer.shはログイン不要で使用できます。ファイルは14日間保存されます。",
+    "selectService": "アップロードサービスを選択",
+    "googleDriveNote": "Gmailアカウントの Google Driveにアップロードされます。",
     "googleDriveSetup": "Google Drive連携",
     "googleDriveSetupDesc": "Google Cloud ConsoleでOAuth認証情報を作成し、入力してください。",
     "clientId": "クライアントID",
@@ -1323,8 +1360,14 @@
     "downloadAnyway": "ダウンロードする",
     "suspiciousLink": "不審なリンク",
     "suspiciousLinkWarning": "このリンクは偽装されている可能性があります：",
+    "suspiciousLinkDesc": "このリンクは危険な可能性があります。続行しますか？",
+    "externalLinkConfirm": "外部リンクを開く",
+    "externalLinkDesc": "このリンクをクリックすると外部ブラウザで開きます。",
+    "linkDestination": "リンク先",
+    "internationalizedDomain": "国際化ドメイン (IDN)",
     "actualDomain": "実際のドメイン",
     "openAnyway": "開く",
+    "openLink": "リンクを開く",
     "emailAuthStatus": "メール認証ステータス",
     "authVerified": "認証済み",
     "authFailed": "認証失敗",

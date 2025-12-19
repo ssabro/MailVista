@@ -13,6 +13,7 @@ import {
   getTagsForEmails,
   getEmailIdsByTag
 } from './storage/tags-repository'
+import { logger, LogCategory } from './logger'
 import type { Tag as RepoTag } from './storage/tags-repository'
 
 // 기본 태그 색상
@@ -66,7 +67,9 @@ function parseEmailId(emailId: string): { folderPath: string; uid: number } | nu
 
 // 모든 태그 조회
 export function getTags(accountEmail: string): Tag[] {
-  return repoGetTags(accountEmail).map(convertTag)
+  const tags = repoGetTags(accountEmail).map(convertTag)
+  logger.debug(LogCategory.TAG, 'Retrieved tags', { accountEmail, count: tags.length })
+  return tags
 }
 
 // 태그 생성 (기존 API 호환)
@@ -75,10 +78,13 @@ export function createTag(
   name: string,
   color: string
 ): { success: boolean; tag?: Tag; error?: string } {
+  logger.info(LogCategory.TAG, 'Creating tag', { accountEmail, name, color })
   const result = addTag(accountEmail, name, color)
   if (result.success && result.tag) {
+    logger.info(LogCategory.TAG, 'Tag created successfully', { tagId: result.tag.id })
     return { success: true, tag: convertTag(result.tag) }
   }
+  logger.warn(LogCategory.TAG, 'Tag creation failed', { error: result.error })
   return { success: result.success, error: result.error }
 }
 
@@ -88,7 +94,11 @@ export function updateTag(
   tagId: string,
   updates: { name?: string; color?: string }
 ): { success: boolean; error?: string } {
+  logger.info(LogCategory.TAG, 'Updating tag', { accountEmail, tagId, updates })
   const result = repoUpdateTag(accountEmail, tagId, updates)
+  if (!result.success) {
+    logger.warn(LogCategory.TAG, 'Tag update failed', { error: result.error })
+  }
   return { success: result.success, error: result.error }
 }
 
@@ -97,7 +107,12 @@ export function deleteTag(
   accountEmail: string,
   tagId: string
 ): { success: boolean; error?: string } {
-  return repoDeleteTag(accountEmail, tagId)
+  logger.info(LogCategory.TAG, 'Deleting tag', { accountEmail, tagId })
+  const result = repoDeleteTag(accountEmail, tagId)
+  if (!result.success) {
+    logger.warn(LogCategory.TAG, 'Tag deletion failed', { error: result.error })
+  }
+  return result
 }
 
 // 이메일에 태그 할당
@@ -107,6 +122,7 @@ export function assignTagToEmail(
   uid: number,
   tagId: string
 ): { success: boolean; error?: string } {
+  logger.debug(LogCategory.TAG, 'Assigning tag to email', { accountEmail, folderPath, uid, tagId })
   const emailId = makeEmailId(folderPath, uid)
   return repoAssignTagToEmail(accountEmail, emailId, tagId)
 }
@@ -118,6 +134,7 @@ export function removeTagFromEmail(
   uid: number,
   tagId: string
 ): { success: boolean; error?: string } {
+  logger.debug(LogCategory.TAG, 'Removing tag from email', { folderPath, uid, tagId })
   const emailId = makeEmailId(folderPath, uid)
   const result = repoRemoveTagFromEmail(emailId, tagId)
   return { success: result.success }

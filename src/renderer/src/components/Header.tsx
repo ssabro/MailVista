@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger
 } from './ui/dropdown-menu'
 import { cn } from '@renderer/lib/utils'
+import { EmailProviderIcon } from './EmailProviderIcon'
 
 type AppView = 'mail' | 'contacts'
 
@@ -60,12 +61,12 @@ export function Header({
   }
 
   return (
-    <header className="flex h-14 items-center justify-between border-b bg-white px-4">
+    <header className="flex h-14 items-center justify-between border-b bg-background px-4">
       {/* Logo */}
       <div className="flex items-center gap-2">
         <div className="flex items-center">
           <span className="text-xl font-bold text-primary">Mail</span>
-          <span className="text-xl font-bold text-gray-700">Vista</span>
+          <span className="text-xl font-bold text-foreground">Vista</span>
         </div>
       </div>
 
@@ -127,6 +128,7 @@ export function Header({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 px-2 py-1 rounded hover:bg-muted transition-colors">
+              <EmailProviderIcon email={accountEmail} size={18} />
               <span className="text-sm text-muted-foreground max-w-[200px] truncate">
                 {accountEmail}
               </span>
@@ -146,6 +148,7 @@ export function Header({
                     <Check className="h-4 w-4 text-primary flex-shrink-0" />
                   )}
                   {account.email !== accountEmail && <div className="w-4 flex-shrink-0" />}
+                  <EmailProviderIcon email={account.email} size={16} className="flex-shrink-0" />
                   <div className="flex flex-col min-w-0">
                     {account.name && (
                       <span className="text-sm font-medium truncate">{account.name}</span>

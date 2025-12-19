@@ -6,6 +6,7 @@ import { getBodyStorage } from '../body-storage'
 import { getSyncQueue, SyncQueue } from './sync-queue'
 import { getStorageDatabase } from '../database'
 import { v4 as uuidv4 } from 'uuid'
+import { logger, LogCategory } from '../../logger'
 
 // 타입 정의 (mail-service.ts와 호환)
 export interface AccountConfig {
@@ -317,6 +318,14 @@ export class SyncWorker {
 
         // EML 파일로 저장
         const bodyPath = await this.bodyStorage.saveBody(accountId, folder.id, uid, emlContent)
+
+        logger.info(LogCategory.SYNC, 'Email body saved locally (background sync)', {
+          accountEmail: accountId,
+          folder: folder.path,
+          uid,
+          bodyPath,
+          size: emlContent.length
+        })
 
         // 본문 텍스트 추출 (검색용)
         const parsed = await simpleParser(emlContent)

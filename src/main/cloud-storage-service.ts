@@ -1,4 +1,3 @@
-import { BrowserWindow } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import { logger, LogCategory } from './logger'
@@ -13,6 +12,11 @@ import {
   type CloudCredentials,
   type CloudStorageSettings
 } from './settings/unified-config'
+import {
+  getOAuthTokens,
+  isOAuthAccount,
+  getXOAuth2Token
+} from './oauth-service'
 
 // Re-export types
 export type { CloudProvider, CloudCredentials, CloudStorageSettings }
@@ -125,8 +129,179 @@ export function isCloudProviderConnected(provider: CloudProvider): boolean {
 }
 
 // =====================================================
-// Transfer.sh 업로드 (대체 서비스 - 인증 불필요)
+// 파일 업로드 서비스 (무료 대체 서비스)
 // =====================================================
+
+// 0x0.st에 업로드 (대체 서비스 1)
+async function uploadTo0x0(
+  fileBuffer: Buffer,
+  fileName: string,
+  fileSize: number
+): Promise<UploadResult> {
+  logger.info(LogCategory.EXPORT, 'Trying 0x0.st upload', { fileName })
+
+  const FormData = (await import('form-data')).default
+  const formData = new FormData()
+  formData.append('file', fileBuffer, { filename: fileName })
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 300000)
+
+  try {
+    const response = await fetch('https://0x0.st', {
+      method: 'POST',
+      body: formData as unknown as BodyInit,
+      headers: formData.getHeaders(),
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+
+    logger.info(LogCategory.EXPORT, '0x0.st response', {
+      status: response.status,
+      statusText: response.statusText
+    })
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`0x0.st failed: ${response.status} - ${body}`)
+    }
+
+    const shareUrl = (await response.text()).trim()
+
+    // 0x0.st는 만료 기간이 파일 크기에 따라 다름 (최소 30일)
+    const expiresAt = new Date()
+    expiresAt.setDate(expiresAt.getDate() + 30)
+
+    return {
+      success: true,
+      provider: 'transfer-sh', // UI 호환성을 위해 동일한 provider 사용
+      fileName,
+      fileSize,
+      shareUrl,
+      expiresAt: expiresAt.toISOString()
+    }
+  } catch (error) {
+    clearTimeout(timeoutId)
+    throw error
+  }
+}
+
+// file.io에 업로드 (대체 서비스 2)
+async function uploadToFileIo(
+  fileBuffer: Buffer,
+  fileName: string,
+  fileSize: number
+): Promise<UploadResult> {
+  logger.info(LogCategory.EXPORT, 'Trying file.io upload', { fileName })
+
+  const FormData = (await import('form-data')).default
+  const formData = new FormData()
+  formData.append('file', fileBuffer, { filename: fileName })
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 300000)
+
+  try {
+    const response = await fetch('https://file.io/?expires=14d', {
+      method: 'POST',
+      body: formData as unknown as BodyInit,
+      headers: formData.getHeaders(),
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+
+    logger.info(LogCategory.EXPORT, 'file.io response', {
+      status: response.status,
+      statusText: response.statusText
+    })
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`file.io failed: ${response.status} - ${body}`)
+    }
+
+    const data = await response.json()
+
+    if (!data.success) {
+      throw new Error(`file.io failed: ${data.message || 'Unknown error'}`)
+    }
+
+    const expiresAt = new Date()
+    expiresAt.setDate(expiresAt.getDate() + 14)
+
+    return {
+      success: true,
+      provider: 'transfer-sh',
+      fileName,
+      fileSize,
+      shareUrl: data.link,
+      expiresAt: expiresAt.toISOString()
+    }
+  } catch (error) {
+    clearTimeout(timeoutId)
+    throw error
+  }
+}
+
+// Transfer.sh에 업로드 (원래 서비스)
+async function uploadToTransferShDirect(
+  fileBuffer: Buffer,
+  fileName: string,
+  fileSize: number
+): Promise<UploadResult> {
+  logger.info(LogCategory.EXPORT, 'Trying Transfer.sh upload', { fileName })
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 300000)
+
+  try {
+    const uploadUrl = `https://transfer.sh/${encodeURIComponent(fileName)}`
+
+    // Buffer를 Uint8Array로 변환 (fetch 호환성)
+    const bodyData = new Uint8Array(fileBuffer)
+
+    const response = await fetch(uploadUrl, {
+      method: 'PUT',
+      body: bodyData,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Max-Days': '14'
+      },
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+
+    logger.info(LogCategory.EXPORT, 'Transfer.sh response', {
+      status: response.status,
+      statusText: response.statusText
+    })
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`Transfer.sh failed: ${response.status} - ${body}`)
+    }
+
+    const shareUrl = (await response.text()).trim()
+
+    const expiresAt = new Date()
+    expiresAt.setDate(expiresAt.getDate() + 14)
+
+    return {
+      success: true,
+      provider: 'transfer-sh',
+      fileName,
+      fileSize,
+      shareUrl,
+      expiresAt: expiresAt.toISOString()
+    }
+  } catch (error) {
+    clearTimeout(timeoutId)
+    throw error
+  }
+}
 
 export async function uploadToTransferSh(
   filePath: string,
@@ -134,48 +309,118 @@ export async function uploadToTransferSh(
 ): Promise<UploadResult> {
   const actualFileName = fileName || path.basename(filePath)
 
-  logger.info(LogCategory.EXPORT, 'Uploading to Transfer.sh', { fileName: actualFileName })
+  logger.info(LogCategory.EXPORT, 'Starting free file hosting upload', { fileName: actualFileName })
 
   try {
-    const fileBuffer = fs.readFileSync(filePath)
-    const fileSize = fileBuffer.length
-
-    // Transfer.sh API 호출
-    const response = await fetch(`https://transfer.sh/${encodeURIComponent(actualFileName)}`, {
-      method: 'PUT',
-      body: fileBuffer,
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Max-Days': '14' // 14일간 보관
+    // 파일 존재 여부 확인
+    if (!fs.existsSync(filePath)) {
+      const error = `File not found: ${filePath}`
+      logger.error(LogCategory.EXPORT, 'Upload failed - file not found', {
+        filePath,
+        fileName: actualFileName
+      })
+      return {
+        success: false,
+        provider: 'transfer-sh',
+        fileName: actualFileName,
+        fileSize: 0,
+        error
       }
-    })
-
-    if (!response.ok) {
-      throw new Error(`Transfer.sh upload failed: ${response.status} ${response.statusText}`)
     }
 
-    const shareUrl = await response.text()
+    // 파일 정보 확인
+    const fileStats = fs.statSync(filePath)
+    const fileSize = fileStats.size
 
-    // 만료일 계산 (14일 후)
-    const expiresAt = new Date()
-    expiresAt.setDate(expiresAt.getDate() + 14)
+    // 파일 크기 제한 확인 (512MB)
+    const maxSize = 512 * 1024 * 1024
+    if (fileSize > maxSize) {
+      const error = `File too large: ${formatFileSize(fileSize)} (max: ${formatFileSize(maxSize)})`
+      logger.error(LogCategory.EXPORT, 'Upload failed - file too large', {
+        fileSize,
+        maxSize,
+        fileName: actualFileName
+      })
+      return {
+        success: false,
+        provider: 'transfer-sh',
+        fileName: actualFileName,
+        fileSize,
+        error
+      }
+    }
 
-    logger.info(LogCategory.EXPORT, 'Transfer.sh upload completed', {
+    logger.info(LogCategory.EXPORT, 'Reading file for upload', {
       fileName: actualFileName,
-      shareUrl
+      fileSize,
+      fileSizeFormatted: formatFileSize(fileSize)
+    })
+
+    const fileBuffer = fs.readFileSync(filePath)
+
+    logger.info(LogCategory.EXPORT, 'File read complete, starting upload attempts', {
+      fileName: actualFileName,
+      bufferSize: fileBuffer.length
+    })
+
+    // 여러 서비스 시도 (폴백 체인)
+    const uploadServices = [
+      { name: '0x0.st', fn: () => uploadTo0x0(fileBuffer, actualFileName, fileSize) },
+      { name: 'file.io', fn: () => uploadToFileIo(fileBuffer, actualFileName, fileSize) },
+      { name: 'Transfer.sh', fn: () => uploadToTransferShDirect(fileBuffer, actualFileName, fileSize) }
+    ]
+
+    const errors: string[] = []
+
+    for (const service of uploadServices) {
+      try {
+        logger.info(LogCategory.EXPORT, `Attempting upload via ${service.name}`, {
+          fileName: actualFileName
+        })
+
+        const result = await service.fn()
+
+        logger.info(LogCategory.EXPORT, `Upload successful via ${service.name}`, {
+          fileName: actualFileName,
+          shareUrl: result.shareUrl
+        })
+
+        return result
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        errors.push(`${service.name}: ${errorMsg}`)
+
+        logger.warn(LogCategory.EXPORT, `${service.name} upload failed, trying next service`, {
+          fileName: actualFileName,
+          error: errorMsg
+        })
+      }
+    }
+
+    // 모든 서비스 실패
+    const errorMessage = `All upload services failed:\n${errors.join('\n')}`
+    logger.error(LogCategory.EXPORT, 'All upload services failed', {
+      fileName: actualFileName,
+      errors
     })
 
     return {
-      success: true,
+      success: false,
       provider: 'transfer-sh',
       fileName: actualFileName,
       fileSize,
-      shareUrl: shareUrl.trim(),
-      expiresAt: expiresAt.toISOString()
+      error: errorMessage
     }
   } catch (error) {
-    logger.error(LogCategory.EXPORT, 'Transfer.sh upload failed', {
-      error: error instanceof Error ? error.message : String(error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const errorName = error instanceof Error ? error.name : 'UnknownError'
+
+    logger.error(LogCategory.EXPORT, 'Upload failed with unexpected error', {
+      fileName: actualFileName,
+      filePath,
+      errorName,
+      errorMessage,
+      stack: error instanceof Error ? error.stack : undefined
     })
 
     return {
@@ -183,222 +428,102 @@ export async function uploadToTransferSh(
       provider: 'transfer-sh',
       fileName: actualFileName,
       fileSize: 0,
-      error: error instanceof Error ? error.message : 'Upload failed'
+      error: errorMessage
     }
   }
 }
 
 // =====================================================
-// Google Drive OAuth 및 업로드
+// Google Drive 업로드 (Gmail OAuth 토큰 재사용)
 // =====================================================
 
-const GOOGLE_OAUTH_SCOPES = [
-  'https://www.googleapis.com/auth/drive.file' // 앱이 생성한 파일만 접근
-]
-
-let authWindow: BrowserWindow | null = null
-
 /**
- * Google OAuth 인증 시작
+ * Gmail 계정의 OAuth 토큰으로 Google Drive 접근 가능 여부 확인
  */
-export async function startGoogleAuth(clientId: string, clientSecret: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const redirectUri = 'http://localhost:8234/oauth/callback'
-
-    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
-    authUrl.searchParams.set('client_id', clientId)
-    authUrl.searchParams.set('redirect_uri', redirectUri)
-    authUrl.searchParams.set('response_type', 'code')
-    authUrl.searchParams.set('scope', GOOGLE_OAUTH_SCOPES.join(' '))
-    authUrl.searchParams.set('access_type', 'offline')
-    authUrl.searchParams.set('prompt', 'consent')
-
-    // OAuth 콜백을 받을 로컬 서버 생성
-    const http = require('http')
-    const server = http.createServer(async (req: any, res: any) => {
-      const url = new URL(req.url, `http://localhost:8234`)
-
-      if (url.pathname === '/oauth/callback') {
-        const code = url.searchParams.get('code')
-        const error = url.searchParams.get('error')
-
-        if (error) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-          res.end('<html><body><h1>인증 실패</h1><p>창을 닫아주세요.</p></body></html>')
-          server.close()
-          if (authWindow) {
-            authWindow.close()
-            authWindow = null
-          }
-          resolve(false)
-          return
-        }
-
-        if (code) {
-          try {
-            // Authorization code를 access token으로 교환
-            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: new URLSearchParams({
-                code,
-                client_id: clientId,
-                client_secret: clientSecret,
-                redirect_uri: redirectUri,
-                grant_type: 'authorization_code'
-              })
-            })
-
-            const tokenData = await tokenResponse.json()
-
-            if (tokenData.access_token) {
-              // 사용자 이메일 가져오기
-              const userInfoResponse = await fetch(
-                'https://www.googleapis.com/oauth2/v2/userinfo',
-                {
-                  headers: { Authorization: `Bearer ${tokenData.access_token}` }
-                }
-              )
-              const userInfo = await userInfoResponse.json()
-
-              saveCloudCredentials('google-drive', {
-                accessToken: tokenData.access_token,
-                refreshToken: tokenData.refresh_token,
-                expiresAt: Date.now() + tokenData.expires_in * 1000,
-                email: userInfo.email
-              })
-
-              // 설정에 클라이언트 정보 저장
-              updateCloudStorageSettings({
-                googleDrive: { clientId, clientSecret }
-              })
-
-              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-              res.end(
-                '<html><body><h1>인증 성공!</h1><p>이 창을 닫아주세요.</p><script>window.close()</script></body></html>'
-              )
-              server.close()
-              if (authWindow) {
-                authWindow.close()
-                authWindow = null
-              }
-              resolve(true)
-              return
-            }
-          } catch (err) {
-            logger.error(LogCategory.APP, 'Google OAuth token exchange failed', { error: err })
-          }
-        }
-
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end('<html><body><h1>인증 실패</h1><p>창을 닫아주세요.</p></body></html>')
-        server.close()
-        if (authWindow) {
-          authWindow.close()
-          authWindow = null
-        }
-        resolve(false)
-      }
-    })
-
-    server.listen(8234, () => {
-      // 인증 윈도우 열기
-      authWindow = new BrowserWindow({
-        width: 600,
-        height: 700,
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true
-        }
-      })
-
-      authWindow.loadURL(authUrl.toString())
-
-      authWindow.on('closed', () => {
-        authWindow = null
-        server.close()
-      })
-    })
-  })
-}
-
-/**
- * Google Drive 토큰 갱신
- */
-async function refreshGoogleToken(): Promise<boolean> {
-  const credentials = getCloudCredentials('google-drive')
-  const settings = getCloudStorageSettings()
-
-  if (!credentials?.refreshToken || !settings.googleDrive) {
+export function canUseGoogleDrive(accountEmail: string): boolean {
+  if (!isOAuthAccount(accountEmail)) {
     return false
   }
+  const tokens = getOAuthTokens(accountEmail)
+  return tokens?.provider === 'google'
+}
 
+/**
+ * Gmail OAuth 토큰에서 유효한 access token 가져오기
+ */
+async function getGoogleAccessToken(accountEmail: string): Promise<string | null> {
   try {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: settings.googleDrive.clientId,
-        client_secret: settings.googleDrive.clientSecret,
-        refresh_token: credentials.refreshToken,
-        grant_type: 'refresh_token'
-      })
-    })
-
-    const data = await response.json()
-
-    if (data.access_token) {
-      saveCloudCredentials('google-drive', {
-        ...credentials,
-        accessToken: data.access_token,
-        expiresAt: Date.now() + data.expires_in * 1000
-      })
-      return true
+    const result = await getXOAuth2Token(accountEmail)
+    if (result.success && result.accessToken) {
+      return result.accessToken
     }
+    logger.error(LogCategory.EXPORT, 'Failed to get Google access token', {
+      email: accountEmail,
+      error: result.error
+    })
+    return null
   } catch (error) {
-    logger.error(LogCategory.APP, 'Failed to refresh Google token', { error })
+    logger.error(LogCategory.EXPORT, 'Error getting Google access token', {
+      email: accountEmail,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return null
   }
+}
 
+// 기존 startGoogleAuth 함수는 더 이상 필요 없음 (Gmail OAuth로 대체)
+// 하지만 하위 호환성을 위해 빈 함수로 유지
+export async function startGoogleAuth(_clientId: string, _clientSecret: string): Promise<boolean> {
+  logger.warn(LogCategory.APP, 'startGoogleAuth is deprecated - use Gmail OAuth instead')
   return false
 }
 
 /**
- * Google Drive에 파일 업로드
+ * Google Drive에 파일 업로드 (Gmail OAuth 토큰 사용)
  */
 export async function uploadToGoogleDrive(
   filePath: string,
-  fileName?: string
+  fileName?: string,
+  accountEmail?: string
 ): Promise<UploadResult> {
   const actualFileName = fileName || path.basename(filePath)
 
-  logger.info(LogCategory.EXPORT, 'Uploading to Google Drive', { fileName: actualFileName })
+  logger.info(LogCategory.EXPORT, 'Uploading to Google Drive', {
+    fileName: actualFileName,
+    accountEmail
+  })
 
-  // 토큰 확인 및 갱신
-  let credentials = getCloudCredentials('google-drive')
-
-  if (!credentials) {
+  // Gmail OAuth 토큰 확인
+  if (!accountEmail) {
     return {
       success: false,
       provider: 'google-drive',
       fileName: actualFileName,
       fileSize: 0,
-      error: 'Google Drive not connected'
+      error: 'Account email is required for Google Drive upload'
     }
   }
 
-  // 토큰 만료 확인
-  if (credentials.expiresAt && Date.now() > credentials.expiresAt - 60000) {
-    const refreshed = await refreshGoogleToken()
-    if (!refreshed) {
-      return {
-        success: false,
-        provider: 'google-drive',
-        fileName: actualFileName,
-        fileSize: 0,
-        error: 'Token expired and refresh failed'
-      }
+  if (!canUseGoogleDrive(accountEmail)) {
+    return {
+      success: false,
+      provider: 'google-drive',
+      fileName: actualFileName,
+      fileSize: 0,
+      error: 'This account does not support Google Drive (not a Gmail OAuth account)'
     }
-    credentials = getCloudCredentials('google-drive')!
+  }
+
+  // Gmail OAuth 토큰에서 access token 가져오기 (자동 갱신 포함)
+  const accessToken = await getGoogleAccessToken(accountEmail)
+  if (!accessToken) {
+    return {
+      success: false,
+      provider: 'google-drive',
+      fileName: actualFileName,
+      fileSize: 0,
+      error: 'Failed to get Google access token'
+    }
   }
 
   try {
@@ -406,13 +531,19 @@ export async function uploadToGoogleDrive(
     const fileSize = fileBuffer.length
     const mimeType = getMimeType(actualFileName)
 
+    logger.info(LogCategory.EXPORT, 'Starting Google Drive upload', {
+      fileName: actualFileName,
+      fileSize,
+      mimeType
+    })
+
     // 1. 파일 메타데이터 생성 및 업로드 (resumable upload)
     const metadataResponse = await fetch(
       'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable',
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${credentials.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -423,7 +554,13 @@ export async function uploadToGoogleDrive(
     )
 
     if (!metadataResponse.ok) {
-      throw new Error(`Failed to initiate upload: ${metadataResponse.status}`)
+      const errorBody = await metadataResponse.text().catch(() => '')
+      logger.error(LogCategory.EXPORT, 'Google Drive metadata request failed', {
+        status: metadataResponse.status,
+        statusText: metadataResponse.statusText,
+        body: errorBody
+      })
+      throw new Error(`Failed to initiate upload: ${metadataResponse.status} - ${errorBody}`)
     }
 
     const uploadUrl = metadataResponse.headers.get('Location')
@@ -432,40 +569,59 @@ export async function uploadToGoogleDrive(
     }
 
     // 2. 실제 파일 업로드
+    const bodyData = new Uint8Array(fileBuffer)
     const uploadResponse = await fetch(uploadUrl, {
       method: 'PUT',
       headers: {
         'Content-Type': mimeType,
         'Content-Length': String(fileSize)
       },
-      body: fileBuffer
+      body: bodyData
     })
 
     if (!uploadResponse.ok) {
-      throw new Error(`Upload failed: ${uploadResponse.status}`)
+      const errorBody = await uploadResponse.text().catch(() => '')
+      logger.error(LogCategory.EXPORT, 'Google Drive upload failed', {
+        status: uploadResponse.status,
+        body: errorBody
+      })
+      throw new Error(`Upload failed: ${uploadResponse.status} - ${errorBody}`)
     }
 
     const uploadedFile = await uploadResponse.json()
 
-    // 3. 공유 권한 설정 (링크가 있는 모든 사용자)
-    await fetch(`https://www.googleapis.com/drive/v3/files/${uploadedFile.id}/permissions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${credentials.accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        role: 'reader',
-        type: 'anyone'
-      })
+    logger.info(LogCategory.EXPORT, 'File uploaded to Google Drive, setting permissions', {
+      fileId: uploadedFile.id
     })
+
+    // 3. 공유 권한 설정 (링크가 있는 모든 사용자)
+    const permResponse = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${uploadedFile.id}/permissions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          role: 'reader',
+          type: 'anyone'
+        })
+      }
+    )
+
+    if (!permResponse.ok) {
+      logger.warn(LogCategory.EXPORT, 'Failed to set permissions, file may not be shareable', {
+        status: permResponse.status
+      })
+    }
 
     // 4. 공유 링크 가져오기
     const fileInfoResponse = await fetch(
       `https://www.googleapis.com/drive/v3/files/${uploadedFile.id}?fields=webViewLink,webContentLink`,
       {
         headers: {
-          Authorization: `Bearer ${credentials.accessToken}`
+          Authorization: `Bearer ${accessToken}`
         }
       }
     )
@@ -572,8 +728,16 @@ export async function uploadLargeFile(
     fileName: fileName || path.basename(filePath)
   })
 
-  // 해당 서비스가 연결되어 있는지 확인
-  if (provider !== 'transfer-sh' && !isCloudProviderConnected(provider)) {
+  // Google Drive는 Gmail OAuth 계정 여부로 판단
+  if (provider === 'google-drive' && !canUseGoogleDrive(accountEmail)) {
+    logger.info(LogCategory.EXPORT, 'Gmail OAuth not available, falling back to Transfer.sh', {
+      accountEmail
+    })
+    provider = 'transfer-sh'
+  }
+
+  // 다른 서비스는 기존 연결 상태로 확인
+  if (provider !== 'transfer-sh' && provider !== 'google-drive' && !isCloudProviderConnected(provider)) {
     logger.info(LogCategory.EXPORT, 'Cloud provider not connected, falling back to Transfer.sh', {
       provider
     })
@@ -581,24 +745,48 @@ export async function uploadLargeFile(
   }
 
   // 업로드 실행
+  let result: UploadResult
+
   switch (provider) {
     case 'google-drive':
-      return uploadToGoogleDrive(filePath, fileName)
+      result = await uploadToGoogleDrive(filePath, fileName, accountEmail)
+      break
 
     case 'onedrive':
       // OneDrive는 추후 구현, Transfer.sh로 대체
       logger.info(LogCategory.EXPORT, 'OneDrive not implemented, using Transfer.sh')
-      return uploadToTransferSh(filePath, fileName)
+      result = await uploadToTransferSh(filePath, fileName)
+      break
 
     case 'naver-cloud':
       // 네이버 클라우드는 추후 구현, Transfer.sh로 대체
       logger.info(LogCategory.EXPORT, 'Naver Cloud not implemented, using Transfer.sh')
-      return uploadToTransferSh(filePath, fileName)
+      result = await uploadToTransferSh(filePath, fileName)
+      break
 
     case 'transfer-sh':
     default:
-      return uploadToTransferSh(filePath, fileName)
+      result = await uploadToTransferSh(filePath, fileName)
+      break
   }
+
+  // 업로드 결과 로깅
+  if (result.success) {
+    logger.info(LogCategory.EXPORT, 'Large file upload completed', {
+      provider: result.provider,
+      fileName: result.fileName,
+      fileSize: result.fileSize,
+      shareUrl: result.shareUrl
+    })
+  } else {
+    logger.error(LogCategory.EXPORT, 'Large file upload failed', {
+      provider: result.provider,
+      fileName: result.fileName,
+      error: result.error
+    })
+  }
+
+  return result
 }
 
 /**

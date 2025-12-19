@@ -21,6 +21,8 @@ export interface EmailRecord {
   size: number
   cached_at: number | null
   sync_status: string
+  // 가상 폴더 조회 시 폴더 경로 (JOIN으로 가져올 때 사용)
+  folder_path?: string
 }
 
 export interface EmailInput {
@@ -121,6 +123,20 @@ export class EmailRepository {
       (this.db
         .prepare('SELECT * FROM emails WHERE folder_id = ? AND uid = ?')
         .get(folderId, uid) as EmailRecord) || null
+    )
+  }
+
+  // 이메일 조회 (계정 전체에서 UID로 검색 - 가상 폴더 삭제 시 사용)
+  getByUidAcrossAccount(accountId: string, uid: number): EmailRecord | null {
+    return (
+      (this.db
+        .prepare(
+          `SELECT e.* FROM emails e
+           INNER JOIN folders f ON e.folder_id = f.id
+           WHERE f.account_id = ? AND e.uid = ? AND e.sync_status != 'deleted'
+           LIMIT 1`
+        )
+        .get(accountId, uid) as EmailRecord) || null
     )
   }
 
@@ -439,6 +455,16 @@ export class EmailRepository {
   }
 
   /**
+   * 폴더 내 모든 이메일 삭제 표시 (폴더 비우기용)
+   */
+  markAllAsDeletedInFolder(folderId: string): number {
+    const result = this.db
+      .prepare(`UPDATE emails SET sync_status = 'deleted' WHERE folder_id = ? AND sync_status != 'deleted'`)
+      .run(folderId)
+    return result.changes
+  }
+
+  /**
    * 삭제 표시 복원 (롤백용)
    */
   restoreDeleted(folderId: string, uids: number[]): number {
@@ -711,6 +737,68 @@ export class EmailRepository {
       `
       )
       .get(folderId) as { count: number }
+    return result.count
+  }
+
+  /**
+   * 계정의 모든 폴더에서 이메일 조회 (전체메일함용)
+   */
+  getAllByAccountIdExcludeDeleted(
+    accountId: string,
+    options: {
+      offset?: number
+      limit?: number
+      unreadOnly?: boolean
+    } = {}
+  ): EmailRecord[] {
+    const { offset = 0, limit = 50, unreadOnly = false } = options
+
+    // 안읽은 메일만 필터링 조건
+    const unreadCondition = unreadOnly
+      ? `AND (e.flags IS NULL OR e.flags = '' OR e.flags = '[]' OR e.flags NOT LIKE '%Seen%')`
+      : ''
+
+    const query = `
+      SELECT e.*, f.path as folder_path FROM emails e
+      INNER JOIN folders f ON e.folder_id = f.id
+      WHERE f.account_id = ? AND e.sync_status != 'deleted' ${unreadCondition}
+      ORDER BY e.date DESC
+      LIMIT ? OFFSET ?
+    `
+
+    return this.db.prepare(query).all(accountId, limit, offset) as EmailRecord[]
+  }
+
+  /**
+   * 계정의 모든 폴더에서 이메일 개수 (전체메일함용)
+   */
+  getAllCountByAccountIdExcludeDeleted(accountId: string): number {
+    const result = this.db
+      .prepare(
+        `
+        SELECT COUNT(*) as count FROM emails e
+        INNER JOIN folders f ON e.folder_id = f.id
+        WHERE f.account_id = ? AND e.sync_status != 'deleted'
+      `
+      )
+      .get(accountId) as { count: number }
+    return result.count
+  }
+
+  /**
+   * 계정의 모든 폴더에서 읽지 않은 이메일 개수 (전체메일함용)
+   */
+  getAllUnreadCountByAccountIdExcludeDeleted(accountId: string): number {
+    const result = this.db
+      .prepare(
+        `
+        SELECT COUNT(*) as count FROM emails e
+        INNER JOIN folders f ON e.folder_id = f.id
+        WHERE f.account_id = ? AND e.sync_status != 'deleted'
+        AND (e.flags IS NULL OR e.flags = '' OR e.flags = '[]' OR e.flags NOT LIKE '%Seen%')
+      `
+      )
+      .get(accountId) as { count: number }
     return result.count
   }
 

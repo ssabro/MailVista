@@ -142,6 +142,9 @@ interface EmailListProps {
   // 상세 검색 다이얼로그 외부 제어 (분할 보기 모드용)
   detailedSearchOpen?: boolean
   onDetailedSearchOpenChange?: (open: boolean) => void
+  // 외부 검색 필터 제어 (분할 보기 모드용)
+  externalFilter?: string
+  onExternalFilterChange?: (filter: string) => void
   // Trello 카드 생성을 위한 이메일 본문 조회 함수
   onGetEmailContent?: (
     uid: number
@@ -207,6 +210,9 @@ export const EmailList = React.memo(function EmailList({
   // 상세 검색 다이얼로그 외부 제어
   detailedSearchOpen,
   onDetailedSearchOpenChange,
+  // 외부 검색 필터 제어
+  externalFilter,
+  onExternalFilterChange,
   // Trello 연동
   onGetEmailContent
 }: EmailListProps): React.ReactElement {
@@ -296,7 +302,11 @@ export const EmailList = React.memo(function EmailList({
   // TanStack Table 상태
   const [sorting, setSorting] = useState<SortingState>([{ id: 'date', desc: true }])
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
-  const [globalFilter, setGlobalFilter] = useState('')
+  const [internalGlobalFilter, setInternalGlobalFilter] = useState('')
+
+  // 외부 필터가 제공되면 외부 값 사용, 아니면 내부 상태 사용
+  const globalFilter = externalFilter ?? internalGlobalFilter
+  const setGlobalFilter = onExternalFilterChange ?? setInternalGlobalFilter
 
   // 선택된 이메일 UID 배열 계산
   const selectedEmails = useMemo(() => {

@@ -306,23 +306,98 @@ function getCredentialsStore() {
 // 암호화 헬퍼
 // =====================================================
 
+// 암호화 가용성 확인
+export function isEncryptionAvailable(): boolean {
+  return safeStorage.isEncryptionAvailable()
+}
+
 function encryptString(str: string): string {
-  if (safeStorage.isEncryptionAvailable()) {
-    return safeStorage.encryptString(str).toString('base64')
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error(
+      'ENCRYPTION_UNAVAILABLE: 시스템에서 암호화를 사용할 수 없습니다. 자격 증명을 안전하게 저장할 수 없습니다.'
+    )
   }
-  return Buffer.from(str).toString('base64')
+  return safeStorage.encryptString(str).toString('base64')
 }
 
 function decryptString(encrypted: string): string {
-  if (safeStorage.isEncryptionAvailable()) {
-    try {
-      const buffer = Buffer.from(encrypted, 'base64')
-      return safeStorage.decryptString(buffer)
-    } catch {
-      return Buffer.from(encrypted, 'base64').toString()
-    }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error(
+      'ENCRYPTION_UNAVAILABLE: 시스템에서 암호화를 사용할 수 없습니다. 자격 증명을 복호화할 수 없습니다.'
+    )
   }
-  return Buffer.from(encrypted, 'base64').toString()
+  try {
+    const buffer = Buffer.from(encrypted, 'base64')
+    return safeStorage.decryptString(buffer)
+  } catch {
+    // 기존 암호화되지 않은 데이터 마이그레이션을 위한 폴백 (deprecated)
+    console.warn(
+      '[보안 경고] 암호화되지 않은 자격 증명이 감지되었습니다. 계정을 다시 추가하여 암호화를 적용해주세요.'
+    )
+    return Buffer.from(encrypted, 'base64').toString()
+  }
+}
+
+// OAuth 토큰 암호화/복호화 헬퍼
+function encryptOAuthTokens(tokens: OAuthTokens): OAuthTokens {
+  return {
+    ...tokens,
+    accessToken: encryptString(tokens.accessToken),
+    refreshToken: encryptString(tokens.refreshToken)
+  }
+}
+
+function decryptOAuthTokens(tokens: OAuthTokens): OAuthTokens {
+  try {
+    return {
+      ...tokens,
+      accessToken: decryptString(tokens.accessToken),
+      refreshToken: decryptString(tokens.refreshToken)
+    }
+  } catch {
+    // 복호화 실패 시 (기존 평문 데이터) 원본 반환
+    return tokens
+  }
+}
+
+// 클라우드 자격 증명 암호화/복호화 헬퍼
+function encryptCloudCredentials(credentials: CloudCredentials): CloudCredentials {
+  const encrypted: CloudCredentials = {
+    ...credentials,
+    accessToken: encryptString(credentials.accessToken)
+  }
+  if (credentials.refreshToken) {
+    encrypted.refreshToken = encryptString(credentials.refreshToken)
+  }
+  return encrypted
+}
+
+function decryptCloudCredentials(credentials: CloudCredentials): CloudCredentials {
+  try {
+    const decrypted: CloudCredentials = {
+      ...credentials,
+      accessToken: decryptString(credentials.accessToken)
+    }
+    if (credentials.refreshToken) {
+      decrypted.refreshToken = decryptString(credentials.refreshToken)
+    }
+    return decrypted
+  } catch {
+    // 복호화 실패 시 (기존 평문 데이터) 원본 반환
+    return credentials
+  }
+}
+
+// 암호화 여부 확인 (이미 암호화된 데이터인지 판단)
+function isEncrypted(str: string): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false
+  try {
+    const buffer = Buffer.from(str, 'base64')
+    safeStorage.decryptString(buffer)
+    return true
+  } catch {
+    return false
+  }
 }
 
 // =====================================================
@@ -685,7 +760,9 @@ export function getOAuthConfig(provider: OAuthProvider): OAuthConfig | undefined
 export function saveOAuthTokens(email: string, provider: OAuthProvider, tokens: OAuthTokens): void {
   const store = getCredentialsStore()
   const oauth = store.get('oauth')
-  oauth.tokens[email] = { provider, tokens }
+  // 토큰 암호화 후 저장
+  const encryptedTokens = encryptOAuthTokens(tokens)
+  oauth.tokens[email] = { provider, tokens: encryptedTokens }
   store.set('oauth', oauth)
 }
 
@@ -693,7 +770,22 @@ export function getOAuthTokens(
   email: string
 ): { provider: OAuthProvider; tokens: OAuthTokens } | undefined {
   const oauth = getCredentialsStore().get('oauth')
-  return oauth.tokens[email]
+  const stored = oauth.tokens[email]
+  if (!stored) return undefined
+
+  // 토큰 복호화 후 반환
+  // 기존 평문 데이터도 호환되도록 처리
+  const decryptedTokens = decryptOAuthTokens(stored.tokens)
+
+  // 기존 평문 데이터인 경우 암호화하여 다시 저장
+  if (!isEncrypted(stored.tokens.accessToken)) {
+    const store = getCredentialsStore()
+    const oauthStore = store.get('oauth')
+    oauthStore.tokens[email] = { provider: stored.provider, tokens: encryptOAuthTokens(stored.tokens) }
+    store.set('oauth', oauthStore)
+  }
+
+  return { provider: stored.provider, tokens: decryptedTokens }
 }
 
 export function deleteOAuthTokens(email: string): void {
@@ -728,13 +820,28 @@ export function updateCloudStorageSettings(
 
 export function getCloudCredentials(provider: CloudProvider): CloudCredentials | undefined {
   const credentials = getCredentialsStore().get('cloudStorage.credentials')
-  return credentials[provider]
+  const stored = credentials[provider]
+  if (!stored) return undefined
+
+  // 자격 증명 복호화 후 반환
+  const decrypted = decryptCloudCredentials(stored)
+
+  // 기존 평문 데이터인 경우 암호화하여 다시 저장
+  if (!isEncrypted(stored.accessToken)) {
+    const store = getCredentialsStore()
+    const current = store.get('cloudStorage.credentials')
+    store.set('cloudStorage.credentials', { ...current, [provider]: encryptCloudCredentials(stored) })
+  }
+
+  return decrypted
 }
 
 export function saveCloudCredentials(provider: CloudProvider, credentials: CloudCredentials): void {
   const store = getCredentialsStore()
   const current = store.get('cloudStorage.credentials')
-  store.set('cloudStorage.credentials', { ...current, [provider]: credentials })
+  // 자격 증명 암호화 후 저장
+  const encrypted = encryptCloudCredentials(credentials)
+  store.set('cloudStorage.credentials', { ...current, [provider]: encrypted })
 }
 
 export function removeCloudCredentials(provider: CloudProvider): void {

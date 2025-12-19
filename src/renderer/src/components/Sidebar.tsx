@@ -2,9 +2,9 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Mail,
+  Mails,
   Send,
   FileText,
-  Archive,
   Settings,
   Inbox,
   Trash2,
@@ -316,6 +316,8 @@ interface SidebarProps {
   onSettingsSelect?: (settingsKey: string) => void
   // 드래그 앤 드롭 이동
   onDropEmails?: (uids: number[], targetFolder: string) => Promise<void>
+  // 현재 선택된 폴더 (계정 전환 시 동기화용)
+  currentFolder?: string
 }
 
 export const Sidebar = React.memo(function Sidebar({
@@ -331,11 +333,21 @@ export const Sidebar = React.memo(function Sidebar({
   onRenameCustomFolder,
   onDeleteCustomFolder,
   onSettingsSelect,
-  onDropEmails
+  onDropEmails,
+  currentFolder
 }: SidebarProps) {
   const { t } = useTranslation()
   const [activeFolder, setActiveFolder] = React.useState('inbox')
   const [dragOverFolder, setDragOverFolder] = React.useState<string | null>(null)
+
+  // 부모 컴포넌트에서 폴더가 변경될 때 (계정 전환 등) 동기화
+  React.useEffect(() => {
+    if (currentFolder) {
+      // 폴더 이름 정규화 (INBOX -> inbox)
+      const normalizedFolder = currentFolder.toLowerCase() === 'inbox' ? 'inbox' : currentFolder
+      setActiveFolder(normalizedFolder)
+    }
+  }, [currentFolder])
 
   // 드래그 앤 드롭 핸들러
   const handleDragOver = (e: React.DragEvent, folder: string) => {
@@ -411,6 +423,13 @@ export const Sidebar = React.memo(function Sidebar({
             onDrop={handleDrop}
           />
 
+          <FolderItem
+            icon={<Mails className="h-4 w-4" />}
+            label={t('sidebar.allMail')}
+            isActive={activeFolder === 'allMail'}
+            onClick={() => handleFolderClick('allMail')}
+          />
+
           <ExpandableFolder
             icon={<Send className="h-4 w-4" />}
             label={t('sidebar.sent')}
@@ -447,19 +466,6 @@ export const Sidebar = React.memo(function Sidebar({
             isActive={activeFolder === 'scheduled'}
             onClick={() => handleFolderClick('scheduled')}
           />
-          <FolderItem
-            icon={<Archive className="h-4 w-4" />}
-            label={t('sidebar.self')}
-            count={folderCounts.self?.unseen || 0}
-            isActive={activeFolder === 'self'}
-            onClick={() => handleFolderClick('self')}
-            onCountClick={() => onUnreadCountClick?.('self')}
-            folderPath="self"
-            isDragOver={dragOverFolder === 'self'}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          />
 
           {/* 내 메일함 (사용자 정의 폴더) */}
           <Separator className="my-2" />
@@ -482,7 +488,6 @@ export const Sidebar = React.memo(function Sidebar({
           <FolderItem
             icon={<AlertCircle className="h-4 w-4" />}
             label={t('sidebar.spam')}
-            count={folderCounts.spam?.total || 0}
             isActive={activeFolder === 'spam'}
             onClick={() => handleFolderClick('spam')}
             folderPath="spam"
@@ -494,7 +499,6 @@ export const Sidebar = React.memo(function Sidebar({
           <FolderItem
             icon={<Trash2 className="h-4 w-4" />}
             label={t('sidebar.trash')}
-            count={folderCounts.trash?.total || 0}
             isActive={activeFolder === 'trash'}
             onClick={() => handleFolderClick('trash')}
             folderPath="trash"

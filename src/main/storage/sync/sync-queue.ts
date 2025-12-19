@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import { v4 as uuidv4 } from 'uuid'
 import { getStorageDatabase } from '../database'
+import { logger, LogCategory } from '../../logger'
 
 export interface SyncQueueItem {
   id: string
@@ -87,6 +88,14 @@ export class SyncQueue {
     )
 
     transaction(items)
+
+    if (count > 0) {
+      logger.info(LogCategory.SYNC, 'Emails queued for body sync', {
+        queued: count,
+        total: items.length
+      })
+    }
+
     return count
   }
 

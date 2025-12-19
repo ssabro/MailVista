@@ -15,15 +15,18 @@ import {
   Shield,
   Trash2,
   Database,
-  HardDrive,
   RefreshCw,
   Download,
   CheckCircle,
   AlertCircle,
   Loader2,
-  FolderOpen
+  FolderOpen,
+  Sun,
+  Moon,
+  Check
 } from 'lucide-react'
 import { changeLanguage } from '../i18n'
+import { useTheme, ColorPalette, ThemeMode, paletteInfo } from '../contexts/ThemeContext'
 import { Progress } from './ui/progress'
 
 export interface GlobalSettingsData {
@@ -115,12 +118,18 @@ const defaultSettings: GlobalSettingsData = {
 
 export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
   const { t } = useTranslation()
+  const { colorPalette, themeMode, setColorPalette, setThemeMode } = useTheme()
   const [settings, setSettings] = useState<GlobalSettingsData>(defaultSettings)
   const [isLoading, setIsLoading] = useState(true)
   const [isClearingCache, setIsClearingCache] = useState(false)
   const [isClearingStorage, setIsClearingStorage] = useState(false)
   const [isClearingLogs, setIsClearingLogs] = useState(false)
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
+  const [cacheResult, setCacheResult] = useState<{
+    deletedFiles: number
+    deletedSize: number
+    message: string
+  } | null>(null)
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
     status: 'idle',
     currentVersion: '1.0.0'
@@ -301,8 +310,18 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
 
   const handleClearCache = async () => {
     setIsClearingCache(true)
+    setCacheResult(null)
     try {
-      await window.electron.ipcRenderer.invoke('clear-cache')
+      const result = await window.electron.ipcRenderer.invoke('clear-cache')
+      if (result.success) {
+        setCacheResult({
+          deletedFiles: result.deletedFiles,
+          deletedSize: result.deletedSize,
+          message: result.message
+        })
+        // 5초 후 결과 메시지 숨김
+        setTimeout(() => setCacheResult(null), 5000)
+      }
     } catch (error) {
       console.error('Failed to clear cache:', error)
     } finally {
@@ -365,10 +384,10 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
   ]
 
   const logLevelOptions = [
-    { value: 'debug', label: 'Debug' },
-    { value: 'info', label: 'Info' },
-    { value: 'warn', label: 'Warning' },
-    { value: 'error', label: 'Error' }
+    { value: 'debug', label: t('globalSettings.logging.levels.debug') },
+    { value: 'info', label: t('globalSettings.logging.levels.info') },
+    { value: 'warn', label: t('globalSettings.logging.levels.warn') },
+    { value: 'error', label: t('globalSettings.logging.levels.error') }
   ]
 
   const retentionOptions = [
@@ -390,6 +409,8 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
     return (
       <Dialog open={isOpen} onOpenChange={onClose}>
         <DialogContent className="max-w-2xl">
+          <DialogTitle className="sr-only">{t('globalSettings.title')}</DialogTitle>
+          <DialogDescription className="sr-only">{t('globalSettings.description')}</DialogDescription>
           <div className="flex items-center justify-center py-8">
             <span className="text-muted-foreground">{t('common.loading')}</span>
           </div>
@@ -451,6 +472,69 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
                       ))}
                     </SelectContent>
                   </Select>
+                </CardContent>
+              </Card>
+
+              {/* 외관 설정 */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">{t('settings.appearance.title')}</CardTitle>
+                  <CardDescription>{t('settings.appearance.desc')}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* 다크 모드 설정 */}
+                  <div className="space-y-3">
+                    <Label>{t('settings.appearance.themeMode')}</Label>
+                    <div className="flex gap-2">
+                      {(['light', 'dark', 'system'] as ThemeMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setThemeMode(mode)}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-all ${
+                            themeMode === mode
+                              ? 'border-primary bg-primary/10 text-primary'
+                              : 'border-border hover:border-primary/50 hover:bg-muted'
+                          }`}
+                        >
+                          {mode === 'light' && <Sun className="h-4 w-4" />}
+                          {mode === 'dark' && <Moon className="h-4 w-4" />}
+                          {mode === 'system' && <Monitor className="h-4 w-4" />}
+                          <span className="text-sm">{t(`settings.appearance.${mode}`)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 컬러 팔레트 설정 */}
+                  <div className="space-y-3">
+                    <Label>{t('settings.appearance.colorPalette')}</Label>
+                    <div className="grid grid-cols-5 gap-3">
+                      {(Object.keys(paletteInfo) as ColorPalette[]).map((palette) => (
+                        <button
+                          key={palette}
+                          onClick={() => setColorPalette(palette)}
+                          className={`relative flex flex-col items-center gap-2 p-3 rounded-lg border transition-all ${
+                            colorPalette === palette
+                              ? 'border-primary bg-primary/10'
+                              : 'border-border hover:border-primary/50 hover:bg-muted'
+                          }`}
+                        >
+                          {colorPalette === palette && (
+                            <div className="absolute top-1 right-1">
+                              <Check className="h-3 w-3 text-primary" />
+                            </div>
+                          )}
+                          <div
+                            className="w-8 h-8 rounded-full border-2 border-white shadow-md"
+                            style={{ backgroundColor: paletteInfo[palette].primaryColor }}
+                          />
+                          <span className="text-xs font-medium">
+                            {t(`settings.appearance.palettes.${palette}`)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -883,7 +967,7 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
                   <CardTitle className="text-base">{t('globalSettings.cache.title')}</CardTitle>
                   <CardDescription>{t('globalSettings.cache.description')}</CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="space-y-3">
                   <Button
                     variant="outline"
                     onClick={handleClearCache}
@@ -893,6 +977,19 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
                     <Trash2 className="h-4 w-4 mr-2" />
                     {isClearingCache ? t('common.processing') : t('globalSettings.cache.clear')}
                   </Button>
+                  {cacheResult && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                      <span className="text-muted-foreground">
+                        {cacheResult.message === 'cache_empty'
+                          ? t('globalSettings.cache.empty')
+                          : t('globalSettings.cache.cleared', {
+                              files: cacheResult.deletedFiles,
+                              size: formatBytes(cacheResult.deletedSize)
+                            })}
+                      </span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -907,14 +1004,11 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
                 <CardContent className="space-y-4">
                   {storageStats && (
                     <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div className="flex items-center gap-2">
-                        <HardDrive className="h-4 w-4 text-muted-foreground" />
-                        <div>
-                          <p className="text-muted-foreground">
-                            {t('globalSettings.storage.diskUsage')}
-                          </p>
-                          <p className="font-medium">{formatBytes(storageStats.storageSize)}</p>
-                        </div>
+                      <div>
+                        <p className="text-muted-foreground">
+                          {t('globalSettings.storage.diskUsage')}
+                        </p>
+                        <p className="font-medium">{formatBytes(storageStats.storageSize)}</p>
                       </div>
                       <div>
                         <p className="text-muted-foreground">

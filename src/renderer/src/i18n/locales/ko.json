@@ -40,7 +40,10 @@
   "notification": {
     "newMailTitle": "새 메일 {{count}}건",
     "newMailBodySingle": "보낸사람: {{from}}\n제목: {{subject}}",
-    "newMailBodyMulti": "보낸사람: {{from}} 외 {{count}}명"
+    "newMailBodyMulti": "보낸사람: {{from}} 외 {{count}}명",
+    "newMailTitleWithAccount": "[{{account}}] 새 메일 {{count}}건",
+    "newMailBodySingleWithAccount": "계정: {{account}}\n보낸사람: {{from}}\n제목: {{subject}}",
+    "newMailBodyMultiWithAccount": "계정: {{account}}\n보낸사람: {{from}} 외 {{count}}명"
   },
   "header": {
     "mail": "메일",
@@ -57,6 +60,7 @@
     "starred": "중요",
     "attachment": "첨부",
     "inbox": "받은메일함",
+    "allMail": "전체메일함",
     "sent": "보낸메일함",
     "drafts": "임시보관함",
     "scheduled": "예약메일함",
@@ -92,6 +96,22 @@
     "e2e": "E2E 암호화",
     "language": "언어",
     "languageDesc": "애플리케이션에서 사용할 언어를 선택합니다.",
+    "appearance": {
+      "title": "외관",
+      "desc": "애플리케이션의 테마와 색상을 설정합니다.",
+      "themeMode": "테마 모드",
+      "light": "라이트",
+      "dark": "다크",
+      "system": "시스템",
+      "colorPalette": "컬러 팔레트",
+      "palettes": {
+        "haze": "Haze",
+        "forest": "Forest",
+        "sunset": "Sunset",
+        "lavender": "Lavender",
+        "rose": "Rose"
+      }
+    },
     "loadingSettings": "설정을 불러오는 중...",
     "resetConfirm": "설정을 기본값으로 초기화하시겠습니까?",
     "saveComplete": "저장 완료",
@@ -297,6 +317,7 @@
     "saveAsEml": "EML로 저장",
     "noEmails": "메일이 없습니다",
     "loadingEmails": "메일을 불러오는 중...",
+    "loadingContent": "메일 내용을 불러오는 중...",
     "switchingAccount": "잠시만 기다려주세요.\n계정을 전환 중입니다.",
     "selectEmail": "메일을 선택하세요",
     "sending": "발송 중...",
@@ -1264,7 +1285,13 @@
       "days": "{{count}}일",
       "openFolder": "로그 폴더 열기",
       "export": "로그 내보내기",
-      "clear": "로그 삭제"
+      "clear": "로그 삭제",
+      "levels": {
+        "debug": "상세 (개발자용)",
+        "info": "일반",
+        "warn": "경고만",
+        "error": "오류만"
+      }
     },
     "updates": {
       "title": "업데이트 설정",
@@ -1287,7 +1314,9 @@
     "cache": {
       "title": "캐시 관리",
       "description": "앱 캐시를 삭제하여 저장 공간을 확보할 수 있습니다.",
-      "clear": "캐시 삭제"
+      "clear": "캐시 삭제",
+      "empty": "삭제할 캐시가 없습니다.",
+      "cleared": "{{files}}개 파일 ({{size}}) 삭제됨"
     },
     "storage": {
       "title": "이메일 저장소",
@@ -1315,7 +1344,12 @@
     "uploadFailed": "업로드 실패: {{files}}",
     "expiresIn14Days": "링크는 14일 후 만료됩니다.",
     "downloadLinks": "대용량 첨부파일 다운로드",
+    "download": "다운로드",
+    "fileCount": "{{count}}개 파일",
+    "linkExpiryNote": "※ 링크는 일정 기간 후 만료될 수 있습니다.",
     "transferShNote": "Transfer.sh는 별도 로그인 없이 사용할 수 있습니다. 파일은 14일간 보관됩니다.",
+    "selectService": "업로드 서비스 선택",
+    "googleDriveNote": "Gmail 계정의 Google Drive에 업로드됩니다.",
     "googleDriveSetup": "Google Drive 연결",
     "googleDriveSetupDesc": "Google Cloud Console에서 OAuth 자격증명을 생성하고 입력하세요.",
     "clientId": "클라이언트 ID",
@@ -1362,10 +1396,14 @@
     "dangerousFileWarning": "이 파일은 악성 코드를 포함할 수 있습니다. 신뢰할 수 있는 발신자인 경우에만 다운로드하세요.",
     "downloadAnyway": "그래도 다운로드",
     "suspiciousLink": "의심스러운 링크",
+    "suspiciousLinkDesc": "이 링크는 위험할 수 있습니다. 계속하시겠습니까?",
+    "externalLinkConfirm": "외부 링크 열기",
+    "externalLinkDesc": "이 링크를 클릭하면 외부 브라우저에서 열립니다.",
     "linkDestination": "링크 대상",
     "internationalizedDomain": "국제화 도메인 (IDN)",
     "actualDomain": "실제 도메인",
     "openAnyway": "그래도 열기",
+    "openLink": "링크 열기",
     "emailAuthStatus": "이메일 인증 상태",
     "authVerified": "인증됨",
     "authFailed": "인증 실패",

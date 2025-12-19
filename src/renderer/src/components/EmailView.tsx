@@ -20,9 +20,34 @@ import {
   ShieldQuestion,
   Lock,
   AlertTriangle,
-  ImageOff
+  ImageOff,
+  X
 } from 'lucide-react'
 import DOMPurify from 'dompurify'
+
+// DOMPurify 보안 설정 - 위험한 태그 제거
+const DOMPURIFY_CONFIG = {
+  USE_PROFILES: { html: true },
+  FORBID_TAGS: [
+    'iframe',
+    'embed',
+    'object',
+    'applet',
+    'script',
+    'noscript',
+    'meta',
+    'link',
+    'style',
+    'base',
+    'form',
+    'input',
+    'button',
+    'select',
+    'textarea'
+  ],
+  FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur']
+}
+
 import { Button } from './ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { cn } from '@renderer/lib/utils'
@@ -92,6 +117,8 @@ interface EmailViewProps {
   isSenderVip?: boolean
   /** 분할 보기 모드에서 헤더 바 숨김 */
   compactMode?: boolean
+  /** 본문 로딩 중 상태 */
+  isLoadingContent?: boolean
   onBack?: () => void
   onPrev?: () => void
   onNext?: () => void
@@ -109,6 +136,7 @@ interface EmailViewProps {
   onToggleStar?: (starred: boolean) => void
   onDeleteUnread?: () => void
   onSearch?: (query: string) => void
+  onDetailedSearch?: () => void
   onRelatedEmailClick?: (id: string) => void
   // 발신자 팝업 관련 콜백
   onToggleSenderVip?: (email: string, isVip: boolean) => void
@@ -171,6 +199,7 @@ export const EmailView = React.memo(function EmailView({
   relatedEmails = [],
   isSenderVip = false,
   compactMode = false,
+  isLoadingContent = false,
   onBack,
   onPrev,
   onNext,
@@ -188,6 +217,7 @@ export const EmailView = React.memo(function EmailView({
   onToggleStar,
   onDeleteUnread,
   onSearch,
+  onDetailedSearch,
   onRelatedEmailClick,
   onToggleSenderVip,
   onComposeToSender,
@@ -609,6 +639,21 @@ export const EmailView = React.memo(function EmailView({
     }
   }
 
+  // 인쇄 미리보기용 HTML에서 링크 비활성화
+  const disableLinksInHtml = (html: string): string => {
+    // DOMParser를 사용하여 링크 비활성화
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, 'text/html')
+    const links = doc.querySelectorAll('a')
+    links.forEach((link) => {
+      // href 속성 제거하고 스타일로 링크처럼 보이게 유지
+      link.removeAttribute('href')
+      link.removeAttribute('target')
+      link.setAttribute('style', 'color: #666; text-decoration: none; cursor: default; pointer-events: none;')
+    })
+    return doc.body.innerHTML
+  }
+
   // 인쇄 미리보기 열기
   const handlePrintPreview = (): void => {
     // 첨부파일 목록 HTML 생성
@@ -625,12 +670,13 @@ export const EmailView = React.memo(function EmailView({
       `
     }
 
-    // 이메일 본문 처리
+    // 이메일 본문 처리 - 링크 비활성화 적용
     let emailContent = ''
     if (email.html) {
-      emailContent = email.html
+      emailContent = disableLinksInHtml(email.html)
     } else if (email.content) {
       // 텍스트 콘텐츠의 경우 HTML 이스케이프 후 줄바꿈 처리
+      // URL은 링크로 변환하지 않음 (텍스트로만 표시)
       emailContent = email.content
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -773,6 +819,39 @@ export const EmailView = React.memo(function EmailView({
     }
   }
 
+  // 이메일 본문 내 링크 클릭 핸들러 (보안 경고 표시)
+  const handleLinkClick = async (e: React.MouseEvent): Promise<void> => {
+    const target = e.target as HTMLElement
+    const link = target.closest('a')
+
+    if (link) {
+      const href = link.getAttribute('href')
+      if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+        e.preventDefault()
+        e.stopPropagation()
+
+        // URL 분석 수행
+        try {
+          const analysis = await window.electron.ipcRenderer.invoke('analyze-url', href)
+          setUrlAnalysis(analysis)
+        } catch {
+          // 분석 실패 시에도 기본 정보로 경고 표시
+          setUrlAnalysis({
+            url: href,
+            domain: new URL(href).hostname,
+            isPunycode: false,
+            decodedDomain: null,
+            riskLevel: 'unknown',
+            warnings: []
+          })
+        }
+
+        setPendingUrl(href)
+        setShowUrlWarning(true)
+      }
+    }
+  }
+
   const formatSize = (bytes: number): string => {
     if (bytes === 0) return '0 B'
     const k = 1024
@@ -791,11 +870,6 @@ export const EmailView = React.memo(function EmailView({
     for (const att of email.attachments) {
       await handleDownloadAttachment(att)
     }
-  }
-
-  const handleSearch = (e: React.FormEvent): void => {
-    e.preventDefault()
-    onSearch?.(searchQuery)
   }
 
   // 이동 관련 핸들러
@@ -858,6 +932,31 @@ export const EmailView = React.memo(function EmailView({
   }
 
   const renderContent = (): React.ReactElement => {
+    // 본문 로딩 중 스켈레톤 표시
+    if (isLoadingContent) {
+      return (
+        <div className="space-y-4 animate-pulse">
+          <div className="flex items-center gap-2 text-muted-foreground mb-4">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>{t('email.loadingContent')}</span>
+          </div>
+          <div className="space-y-3">
+            <div className="h-4 bg-muted rounded w-full" />
+            <div className="h-4 bg-muted rounded w-5/6" />
+            <div className="h-4 bg-muted rounded w-4/6" />
+            <div className="h-4 bg-muted rounded w-full" />
+            <div className="h-4 bg-muted rounded w-3/4" />
+          </div>
+          <div className="h-4 bg-muted rounded w-0" />
+          <div className="space-y-3">
+            <div className="h-4 bg-muted rounded w-full" />
+            <div className="h-4 bg-muted rounded w-2/3" />
+            <div className="h-4 bg-muted rounded w-5/6" />
+          </div>
+        </div>
+      )
+    }
+
     // 암호화된 메일 처리
     if (encryptionType !== 'none') {
       // 복호화 중
@@ -916,7 +1015,7 @@ export const EmailView = React.memo(function EmailView({
                 className="prose prose-sm max-w-none"
                 dangerouslySetInnerHTML={{
                   __html: DOMPurify.sanitize(decryptedContent.html, {
-                    USE_PROFILES: { html: true },
+                    ...DOMPURIFY_CONFIG,
                     ADD_ATTR: ['target']
                   })
                 }}
@@ -1025,7 +1124,7 @@ export const EmailView = React.memo(function EmailView({
         })
 
         const sanitizedHtml = DOMPurify.sanitize(email.html, {
-          USE_PROFILES: { html: true },
+          ...DOMPURIFY_CONFIG,
           ADD_ATTR: ['target', 'data-blocked-src']
         })
 
@@ -1047,7 +1146,7 @@ export const EmailView = React.memo(function EmailView({
 
       // 이미지 차단 비활성화 시 일반 렌더링
       const sanitizedHtml = DOMPurify.sanitize(email.html, {
-        USE_PROFILES: { html: true },
+        ...DOMPURIFY_CONFIG,
         ADD_ATTR: ['target']
       })
 
@@ -1130,27 +1229,43 @@ export const EmailView = React.memo(function EmailView({
               </button>
             )}
           </div>
-          <form onSubmit={handleSearch} className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <div className="relative">
-              <Input
+              <input
                 type="text"
                 placeholder={t('common.searchPlaceholder')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="h-8 w-48 pr-8 text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && searchQuery.trim()) {
+                    onSearch?.(searchQuery)
+                  }
+                }}
+                className={`w-[200px] h-9 px-3 pr-16 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary ${searchQuery ? 'border-primary' : ''}`}
               />
-              <button
-                type="submit"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <Search className="h-4 w-4" />
-              </button>
+              {searchQuery ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-8 top-1/2 -translate-y-1/2 p-1 hover:bg-muted rounded"
+                >
+                  <X className="h-3 w-3 text-muted-foreground" />
+                </button>
+              ) : null}
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 p-1">
+                <Search className="h-4 w-4 text-muted-foreground" />
+              </div>
             </div>
-            <Button variant="outline" size="sm" className="h-8 text-sm">
-              {t('email.detail')}
-              <ChevronDown className="h-3 w-3 ml-1" />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1"
+              onClick={onDetailedSearch}
+            >
+              {t('search.detailed')}
+              <ChevronDown className="h-3 w-3" />
             </Button>
-          </form>
+          </div>
         </div>
       )}
 
@@ -1419,11 +1534,11 @@ export const EmailView = React.memo(function EmailView({
                         <span
                           className={cn(
                             'px-2 py-0.5 rounded text-xs font-medium',
-                            emailAuthStatus.spf === 'pass' && 'bg-green-100 text-green-700',
-                            emailAuthStatus.spf === 'fail' && 'bg-red-100 text-red-700',
-                            emailAuthStatus.spf === 'softfail' && 'bg-yellow-100 text-yellow-700',
+                            emailAuthStatus.spf === 'pass' && 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                            emailAuthStatus.spf === 'fail' && 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+                            emailAuthStatus.spf === 'softfail' && 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300',
                             !['pass', 'fail', 'softfail'].includes(emailAuthStatus.spf) &&
-                              'bg-gray-100 text-gray-600'
+                              'bg-muted text-muted-foreground'
                           )}
                         >
                           {emailAuthStatus.spf}
@@ -1434,10 +1549,10 @@ export const EmailView = React.memo(function EmailView({
                         <span
                           className={cn(
                             'px-2 py-0.5 rounded text-xs font-medium',
-                            emailAuthStatus.dkim === 'pass' && 'bg-green-100 text-green-700',
-                            emailAuthStatus.dkim === 'fail' && 'bg-red-100 text-red-700',
+                            emailAuthStatus.dkim === 'pass' && 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                            emailAuthStatus.dkim === 'fail' && 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
                             !['pass', 'fail'].includes(emailAuthStatus.dkim) &&
-                              'bg-gray-100 text-gray-600'
+                              'bg-muted text-muted-foreground'
                           )}
                         >
                           {emailAuthStatus.dkim}
@@ -1448,10 +1563,10 @@ export const EmailView = React.memo(function EmailView({
                         <span
                           className={cn(
                             'px-2 py-0.5 rounded text-xs font-medium',
-                            emailAuthStatus.dmarc === 'pass' && 'bg-green-100 text-green-700',
-                            emailAuthStatus.dmarc === 'fail' && 'bg-red-100 text-red-700',
+                            emailAuthStatus.dmarc === 'pass' && 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                            emailAuthStatus.dmarc === 'fail' && 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
                             !['pass', 'fail'].includes(emailAuthStatus.dmarc) &&
-                              'bg-gray-100 text-gray-600'
+                              'bg-muted text-muted-foreground'
                           )}
                         >
                           {emailAuthStatus.dmarc}
@@ -1604,7 +1719,7 @@ export const EmailView = React.memo(function EmailView({
           )}
 
           {/* Email Body */}
-          <div className="prose prose-sm max-w-none mb-8">
+          <div className="prose prose-sm max-w-none mb-8" onClick={handleLinkClick}>
             {translatedContent ? (
               <div className="whitespace-pre-wrap text-sm leading-relaxed">{translatedContent}</div>
             ) : (
@@ -1704,9 +1819,9 @@ export const EmailView = React.memo(function EmailView({
             <DialogTitle>{t('email.printPreview')}</DialogTitle>
             <DialogDescription>{t('email.printPreviewDesc')}</DialogDescription>
           </DialogHeader>
-          <div className="flex-1 overflow-auto border rounded-md bg-gray-100 p-4">
+          <div className="flex-1 overflow-auto border rounded-md bg-muted p-4">
             <div
-              className="bg-white shadow-lg mx-auto"
+              className="bg-white shadow-lg mx-auto dark:bg-gray-100"
               style={{ maxWidth: '800px' }}
               dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(printPreviewContent) }}
             />
@@ -1757,18 +1872,27 @@ export const EmailView = React.memo(function EmailView({
         </DialogContent>
       </Dialog>
 
-      {/* 의심스러운 URL 경고 다이얼로그 */}
+      {/* URL 확인 / 의심스러운 URL 경고 다이얼로그 */}
       <Dialog open={showUrlWarning} onOpenChange={setShowUrlWarning}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle
-                className={
-                  urlAnalysis?.riskLevel === 'dangerous' ? 'text-red-600' : 'text-yellow-600'
-                }
-              />
-              {t('security.suspiciousLink')}
+              {urlAnalysis?.riskLevel === 'dangerous' ? (
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+              ) : urlAnalysis?.riskLevel === 'suspicious' || (urlAnalysis?.warnings && urlAnalysis.warnings.length > 0) ? (
+                <AlertTriangle className="h-5 w-5 text-yellow-600" />
+              ) : (
+                <ExternalLink className="h-5 w-5 text-primary" />
+              )}
+              {urlAnalysis?.riskLevel === 'dangerous' || urlAnalysis?.riskLevel === 'suspicious' || (urlAnalysis?.warnings && urlAnalysis.warnings.length > 0)
+                ? t('security.suspiciousLink')
+                : t('security.externalLinkConfirm')}
             </DialogTitle>
+            <DialogDescription>
+              {urlAnalysis?.riskLevel === 'dangerous' || urlAnalysis?.riskLevel === 'suspicious' || (urlAnalysis?.warnings && urlAnalysis.warnings.length > 0)
+                ? t('security.suspiciousLinkDesc')
+                : t('security.externalLinkDesc')}
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-4">
             <div className="p-3 bg-muted rounded">
@@ -1777,18 +1901,18 @@ export const EmailView = React.memo(function EmailView({
             </div>
 
             {urlAnalysis?.isPunycode && urlAnalysis.decodedDomain && (
-              <div className="p-3 bg-yellow-50 border border-yellow-200 rounded">
-                <p className="text-sm font-medium text-yellow-800">
+              <div className="p-3 bg-yellow-50 border border-yellow-200 rounded dark:bg-yellow-900/30 dark:border-yellow-800">
+                <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
                   {t('security.internationalizedDomain')}
                 </p>
-                <p className="text-sm text-yellow-700">
+                <p className="text-sm text-yellow-700 dark:text-yellow-300">
                   {t('security.actualDomain')}: {urlAnalysis.decodedDomain}
                 </p>
               </div>
             )}
 
-            {urlAnalysis?.warnings.map((warning, i) => (
-              <div key={i} className="flex items-start gap-2 text-sm text-red-700">
+            {urlAnalysis?.warnings && urlAnalysis.warnings.length > 0 && urlAnalysis.warnings.map((warning, i) => (
+              <div key={i} className="flex items-start gap-2 text-sm text-red-700 dark:text-red-400">
                 <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
                 <span>{warning}</span>
               </div>
@@ -1809,7 +1933,9 @@ export const EmailView = React.memo(function EmailView({
               variant={urlAnalysis?.riskLevel === 'dangerous' ? 'destructive' : 'default'}
               onClick={handleConfirmOpenUrl}
             >
-              {t('security.openAnyway')}
+              {urlAnalysis?.riskLevel === 'dangerous' || urlAnalysis?.riskLevel === 'suspicious' || (urlAnalysis?.warnings && urlAnalysis.warnings.length > 0)
+                ? t('security.openAnyway')
+                : t('security.openLink')}
             </Button>
           </DialogFooter>
         </DialogContent>

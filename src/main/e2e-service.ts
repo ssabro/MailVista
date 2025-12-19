@@ -5,6 +5,7 @@
 
 import { ipcMain } from 'electron'
 import { SignalCrypto, isE2EEncrypted, hasE2EHeader, createE2EHeaders, runE2ETests } from './e2e'
+import { logger, LogCategory } from './logger'
 
 // Cache for SignalCrypto instances per account
 const cryptoInstances: Map<string, SignalCrypto> = new Map()
@@ -61,7 +62,9 @@ export function registerE2EHandlers(): void {
 
       return result
     } catch (error) {
-      console.error('[E2E Service] Registration failed:', error)
+      logger.error(LogCategory.E2E, 'E2E registration failed', {
+        error: error instanceof Error ? error.message : 'Registration failed'
+      })
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Registration failed'
@@ -388,7 +391,7 @@ export function registerE2EHandlers(): void {
     }
   })
 
-  console.log('[E2E Service] Handlers registered')
+  logger.info(LogCategory.E2E, 'E2E encryption handlers registered')
 }
 
 /**

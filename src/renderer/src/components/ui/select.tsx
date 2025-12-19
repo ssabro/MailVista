@@ -1,5 +1,4 @@
 import * as React from 'react'
-import * as ReactDOM from 'react-dom'
 import { cn } from '@renderer/lib/utils'
 import { ChevronDown } from 'lucide-react'
 
@@ -24,16 +23,24 @@ interface SelectProps {
 
 function Select({ value = '', onValueChange, children }: SelectProps) {
   const [open, setOpen] = React.useState(false)
-  const labelsRef = React.useRef<Map<string, string>>(new Map())
+  const [labels, setLabels] = React.useState<Map<string, string>>(new Map())
   const triggerRef = React.useRef<HTMLButtonElement>(null)
 
   const registerItem = React.useCallback((itemValue: string, label: string) => {
-    labelsRef.current.set(itemValue, label)
+    setLabels((prev) => {
+      if (prev.get(itemValue) === label) return prev
+      const next = new Map(prev)
+      next.set(itemValue, label)
+      return next
+    })
   }, [])
 
-  const getLabel = React.useCallback((itemValue: string) => {
-    return labelsRef.current.get(itemValue)
-  }, [])
+  const getLabel = React.useCallback(
+    (itemValue: string) => {
+      return labels.get(itemValue)
+    },
+    [labels]
+  )
 
   const selectItem = React.useCallback(
     (itemValue: string) => {
@@ -106,55 +113,55 @@ interface SelectContentProps {
 function SelectContent({ children, className }: SelectContentProps) {
   const context = React.useContext(SelectContext)
   if (!context) throw new Error('SelectContent must be used within Select')
-  const [position, setPosition] = React.useState({ top: 0, left: 0, width: 0 })
+  const contentRef = React.useRef<HTMLDivElement>(null)
 
-  // 트리거 위치 계산
+  // 외부 클릭 감지하여 닫기
   React.useEffect(() => {
-    if (context.open && context.triggerRef.current) {
-      const rect = context.triggerRef.current.getBoundingClientRect()
-      setPosition({
-        top: rect.bottom + 4,
-        left: rect.left,
-        width: rect.width
-      })
+    if (!context.open) return
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        contentRef.current &&
+        !contentRef.current.contains(e.target as Node) &&
+        context.triggerRef.current &&
+        !context.triggerRef.current.contains(e.target as Node)
+      ) {
+        context.setOpen(false)
+      }
+    }
+
+    // 약간의 지연 후 이벤트 리스너 추가 (클릭으로 열릴 때 바로 닫히는 것 방지)
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside)
+    }, 0)
+
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [context.open, context.triggerRef])
 
-  if (!context.open) return null
-
-  return ReactDOM.createPortal(
+  // 항상 children을 렌더링하여 라벨 등록이 되도록 함 (숨김 상태로)
+  // 이렇게 해야 SelectValue에서 올바른 라벨을 표시할 수 있음
+  return (
     <>
-      {/* 백드롭 - 클릭하면 닫힘 */}
-      <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 99998
-        }}
-        onClick={(e) => {
-          e.stopPropagation()
-          context.setOpen(false)
-        }}
-      />
-      {/* 드롭다운 컨텐츠 */}
-      <div
-        style={{
-          position: 'fixed',
-          top: position.top,
-          left: position.left,
-          width: position.width,
-          zIndex: 99999
-        }}
-        className={cn(
-          'max-h-60 overflow-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md',
-          className
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {children}
-      </div>
-    </>,
-    document.body
+      {/* 라벨 등록용 숨김 렌더링 */}
+      <div style={{ display: 'none' }}>{children}</div>
+
+      {/* 실제 드롭다운 (열려있을 때만 표시) - 인라인 렌더링 */}
+      {context.open && (
+        <div
+          ref={contentRef}
+          className={cn(
+            'absolute left-0 top-full mt-1 w-full z-50 max-h-60 overflow-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md',
+            className
+          )}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {children}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -171,7 +178,8 @@ function SelectItem({ value, children }: SelectItemProps) {
   React.useEffect(() => {
     const label = typeof children === 'string' ? children : String(children)
     context.registerItem(value, label)
-  }, [value, children, context])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, children])
 
   const isSelected = context.value === value
 

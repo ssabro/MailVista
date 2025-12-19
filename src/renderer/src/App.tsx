@@ -1,7 +1,16 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { RefreshCw, Search, ChevronDown } from 'lucide-react'
+import { RefreshCw, Search, ChevronDown, X } from 'lucide-react'
 import { Button } from './components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription
+} from './components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger } from './components/ui/select'
+import { Checkbox } from './components/ui/checkbox'
 import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
 import { EmailList, DetailedSearchParams } from './components/EmailList'
@@ -176,6 +185,21 @@ function App(): React.JSX.Element {
   const [isResizing, setIsResizing] = React.useState(false)
   const splitContainerRef = React.useRef<HTMLDivElement>(null)
   const [splitDetailedSearchOpen, setSplitDetailedSearchOpen] = React.useState(false)
+  const [splitGlobalFilter, setSplitGlobalFilter] = React.useState('')
+  const [viewDetailedSearchOpen, setViewDetailedSearchOpen] = React.useState(false)
+  const [viewDetailedSearch, setViewDetailedSearch] = React.useState<DetailedSearchParams>({
+    sender: '',
+    recipientType: 'to',
+    recipient: '',
+    contentType: 'all',
+    content: '',
+    mailbox: 'all',
+    periodType: 'all',
+    startDate: '',
+    endDate: '',
+    hasAttachment: false,
+    includeTrashSpam: false
+  })
 
   // 분할 보기 리사이즈 핸들러
   const handleResizeStart = React.useCallback((e: React.MouseEvent) => {
@@ -224,6 +248,7 @@ function App(): React.JSX.Element {
 
   // 잠금 화면 상태
   const [isLocked, setIsLocked] = React.useState(false)
+  const [isPinEnabledForLock, setIsPinEnabledForLock] = React.useState(false) // 잠금 해제 시 PIN 필요 여부
   const lastActivityRef = React.useRef<number>(Date.now())
 
   // PIN 인증 상태
@@ -244,6 +269,7 @@ function App(): React.JSX.Element {
     React.useState<DetailedSearchParams | null>(null)
   const [selectedEmailIndex, setSelectedEmailIndex] = React.useState(-1)
   const [showUnreadOnly, setShowUnreadOnly] = React.useState(false) // 안읽은 메일만 필터링
+  const [isLoadingContent, setIsLoadingContent] = React.useState(false) // 이메일 본문 로딩 중
 
   // 안읽은 메일만 필터링된 목록
   // Note: showUnreadOnly일 때 서버에서 이미 필터링되어 반환되므로 클라이언트 추가 필터링 불필요
@@ -409,12 +435,25 @@ function App(): React.JSX.Element {
     loadAccountSettings()
   }, [currentAccount])
 
+  // 백그라운드 동기화 간격 설정 (설정 변경 시 백엔드에 전달)
+  React.useEffect(() => {
+    if (appState !== 'main' || pollingInterval === 0) return
+
+    // 백엔드 동기화 매니저에 간격 설정 전달
+    window.electron.ipcRenderer
+      .invoke('set-background-sync-interval', pollingInterval)
+      .catch((error) => {
+        console.error('Failed to set background sync interval:', error)
+      })
+  }, [appState, pollingInterval])
+
   // 자동 잠금 기능 (사용자 비활성 시)
   React.useEffect(() => {
     if (appState !== 'main') return
 
     let autoLockEnabled = false
     let autoLockTime = 5 // 기본값 5분
+    let pinEnabled = false // PIN 잠금 활성화 여부
 
     // 글로벌 설정 로드
     const loadSecuritySettings = async () => {
@@ -422,6 +461,8 @@ function App(): React.JSX.Element {
         const globalSettings = await window.electron.ipcRenderer.invoke('get-global-settings')
         autoLockEnabled = globalSettings?.security?.autoLock ?? false
         autoLockTime = globalSettings?.security?.autoLockTime ?? 5
+        // PIN 활성화 여부 확인
+        pinEnabled = await window.electron.ipcRenderer.invoke('is-pin-enabled')
       } catch (error) {
         console.error('Failed to load security settings:', error)
       }
@@ -438,11 +479,18 @@ function App(): React.JSX.Element {
     events.forEach((event) => window.addEventListener(event, updateActivity))
 
     // 비활성 체크 인터벌 (1분마다)
-    const checkInterval = setInterval(() => {
+    const checkInterval = setInterval(async () => {
       if (!autoLockEnabled || isLocked) return
 
       const inactiveTime = (Date.now() - lastActivityRef.current) / 1000 / 60 // 분 단위
       if (inactiveTime >= autoLockTime) {
+        // PIN 활성화 상태를 다시 확인 (설정 변경 반영)
+        try {
+          const currentPinEnabled = await window.electron.ipcRenderer.invoke('is-pin-enabled')
+          setIsPinEnabledForLock(currentPinEnabled)
+        } catch {
+          setIsPinEnabledForLock(pinEnabled)
+        }
         setIsLocked(true)
       }
     }, 60000) // 1분마다 체크
@@ -456,6 +504,7 @@ function App(): React.JSX.Element {
   // 잠금 해제 핸들러
   const handleUnlock = React.useCallback(() => {
     setIsLocked(false)
+    setIsPinEnabledForLock(false)
     lastActivityRef.current = Date.now()
   }, [])
 
@@ -511,75 +560,194 @@ function App(): React.JSX.Element {
     }
   }, [appState, currentAccount])
 
-  // 새 메일 폴링 (설정에 따른 주기)
+  // 백그라운드에서 새 메일 수신 시 알림 처리 (모든 계정)
   React.useEffect(() => {
-    // pollingInterval이 0이면 자동 동기화 비활성화
-    if (appState !== 'main' || !currentAccount || !isInitialized || pollingInterval === 0) return
+    if (appState !== 'main') return
 
-    const checkNewMails = async () => {
-      if (isSyncing) return
-      setIsSyncing(true)
+    const handleNewMailReceived = async (
+      _event: unknown,
+      data: {
+        accountEmail: string
+        newCount: number
+        emails: { uid: number; from: string; subject: string; date: Date }[]
+      }
+    ) => {
+      console.log('[handleNewMailReceived] New mail received:', data)
 
-      try {
-        // 먼저 스팸 필터 적용 (차단된 발신자의 메일을 스팸 폴더로 이동)
-        await window.electron.ipcRenderer.invoke('apply-spam-filter', currentAccount)
+      if (data.newCount > 0 && data.emails.length > 0) {
+        const firstEmail = data.emails[0]
+        // 제목이 너무 길면 30자로 자르기
+        const truncatedSubject =
+          firstEmail.subject.length > 30
+            ? firstEmail.subject.substring(0, 30) + '...'
+            : firstEmail.subject
 
-        const result = await window.electron.ipcRenderer.invoke(
-          'check-new-emails',
-          currentAccount,
-          'INBOX'
-        )
+        // 계정 이름 추출 (이메일 주소에서 @ 앞부분 또는 전체)
+        const accountName = data.accountEmail.split('@')[0]
 
-        if (result.success && result.newCount > 0) {
-          // 데스크탑 알림 표시
-          const firstEmail = result.emails[0]
-          // 제목이 너무 길면 30자로 자르기
-          const truncatedSubject =
-            firstEmail.subject.length > 30
-              ? firstEmail.subject.substring(0, 30) + '...'
-              : firstEmail.subject
-          const notificationBody =
-            result.newCount === 1
+        // 현재 활성 계정인지 확인
+        const isActiveAccount = data.accountEmail === currentAccount
+
+        // 알림 본문 구성 (비활성 계정이면 계정 정보 포함)
+        let notificationTitle: string
+        let notificationBody: string
+
+        if (isActiveAccount) {
+          // 현재 활성 계정 - 기존 형식
+          notificationTitle = t('notification.newMailTitle', { count: data.newCount })
+          notificationBody =
+            data.newCount === 1
               ? t('notification.newMailBodySingle', {
                   from: firstEmail.from,
                   subject: truncatedSubject
                 })
               : t('notification.newMailBodyMulti', {
                   from: firstEmail.from,
-                  count: result.newCount - 1
+                  count: data.newCount - 1
                 })
-
-          await window.electron.ipcRenderer.invoke(
-            'show-notification',
-            t('notification.newMailTitle', { count: result.newCount }),
-            notificationBody
-          )
-
-          // 현재 INBOX를 보고 있으면 목록 새로고침
-          if (currentFolder === 'INBOX' && currentPage === 1) {
-            await loadEmails()
-          }
-
-          // 폴더 정보 업데이트
-          await loadFolders()
+        } else {
+          // 비활성 계정 - 계정 정보 포함
+          notificationTitle = t('notification.newMailTitleWithAccount', {
+            count: data.newCount,
+            account: accountName
+          })
+          notificationBody =
+            data.newCount === 1
+              ? t('notification.newMailBodySingleWithAccount', {
+                  account: data.accountEmail,
+                  from: firstEmail.from,
+                  subject: truncatedSubject
+                })
+              : t('notification.newMailBodyMultiWithAccount', {
+                  account: data.accountEmail,
+                  from: firstEmail.from,
+                  count: data.newCount - 1
+                })
         }
 
+        // 데스크탑 알림 표시
+        await window.electron.ipcRenderer.invoke('show-notification', notificationTitle, notificationBody)
+
+        // 현재 활성 계정의 INBOX를 보고 있으면 목록 새로고침
+        if (isActiveAccount && currentFolder === 'INBOX' && currentPage === 1) {
+          const emailResult = await window.electron.ipcRenderer.invoke(
+            'get-emails-local',
+            currentAccount,
+            'INBOX',
+            { start: 1, limit: emailsPerPage }
+          )
+          if (emailResult.success) {
+            setEmails(emailResult.emails || [])
+            setTotalEmails(emailResult.total || 0)
+          }
+        }
+
+        // 해당 계정의 읽지 않은 메일 수 업데이트
+        setAccountUnreadCounts((prev) => ({
+          ...prev,
+          [data.accountEmail]: (prev[data.accountEmail] || 0) + data.newCount
+        }))
+
         setLastSyncTime(new Date())
-      } catch (error) {
-        console.error('Failed to check new emails:', error)
-      } finally {
-        setIsSyncing(false)
       }
     }
 
-    // 초기 실행
-    checkNewMails()
+    // 이벤트 리스너 등록
+    window.electron.ipcRenderer.on('new-mail-received', handleNewMailReceived)
 
-    // 주기적 실행
-    const interval = setInterval(checkNewMails, pollingInterval)
+    // 정리 함수
+    return () => {
+      window.electron.ipcRenderer.removeAllListeners('new-mail-received')
+    }
+  }, [appState, currentAccount, currentFolder, currentPage, emailsPerPage, t])
 
-    return () => clearInterval(interval)
-  }, [appState, currentAccount, isInitialized, pollingInterval])
+  // 백엔드에서 데이터 변경 시 UI 업데이트 (Push 방식)
+  React.useEffect(() => {
+    if (appState !== 'main' || !currentAccount) return
+
+    // 폴더 카운트 업데이트 이벤트 핸들러
+    const handleFolderCountsUpdated = async (
+      _event: unknown,
+      data: { accountEmail: string; folderPath?: string }
+    ) => {
+      // 현재 계정의 이벤트만 처리
+      if (data.accountEmail !== currentAccount) return
+
+      console.log('[handleFolderCountsUpdated] Updating folder counts...', data)
+
+      // 로컬 DB에서 모든 폴더 카운트 조회
+      const result = await window.electron.ipcRenderer.invoke(
+        'get-all-folder-counts-local',
+        currentAccount
+      )
+
+      if (result.success && result.counts) {
+        const newInfos: Record<string, { path: string; total: number; unseen: number }> = {}
+        for (const [path, counts] of Object.entries(
+          result.counts as Record<string, { total: number; unseen: number }>
+        )) {
+          newInfos[path] = {
+            path,
+            total: counts.total || 0,
+            unseen: counts.unseen || 0
+          }
+        }
+        setFolderInfos(newInfos)
+
+        // 캐시 업데이트
+        folderInfoCacheRef.current = {
+          account: currentAccount,
+          timestamp: Date.now(),
+          infos: newInfos
+        }
+
+        // INBOX 읽지 않은 메일 수 업데이트
+        if (newInfos['INBOX']) {
+          setAccountUnreadCounts((prev) => ({
+            ...prev,
+            [currentAccount]: newInfos['INBOX'].unseen || 0
+          }))
+        }
+      }
+    }
+
+    // 이메일 목록 업데이트 이벤트 핸들러
+    const handleEmailsUpdated = async (
+      _event: unknown,
+      data: { accountEmail: string; folderPath: string; changeType: string }
+    ) => {
+      // 현재 계정의 이벤트만 처리
+      if (data.accountEmail !== currentAccount) return
+
+      console.log('[handleEmailsUpdated] Emails updated', data)
+
+      // 현재 보고 있는 폴더가 변경된 경우에만 이메일 목록 새로고침
+      if (data.folderPath === currentFolder) {
+        // 이메일 목록 새로고침
+        const emailResult = await window.electron.ipcRenderer.invoke(
+          'get-emails-local',
+          currentAccount,
+          currentFolder,
+          { start: (currentPage - 1) * emailsPerPage + 1, limit: emailsPerPage }
+        )
+
+        if (emailResult.success) {
+          setEmails(emailResult.emails || [])
+          setTotalEmails(emailResult.total || 0)
+        }
+      }
+    }
+
+    // 이벤트 리스너 등록
+    window.electron.ipcRenderer.on('folder-counts-updated', handleFolderCountsUpdated)
+    window.electron.ipcRenderer.on('emails-updated', handleEmailsUpdated)
+
+    // 정리 함수
+    return () => {
+      window.electron.ipcRenderer.removeAllListeners('folder-counts-updated')
+      window.electron.ipcRenderer.removeAllListeners('emails-updated')
+    }
+  }, [appState, currentAccount, currentFolder, currentPage, emailsPerPage])
 
   // 수동 동기화 핸들러 (전체 메일함 동기화)
   const handleManualSync = async () => {
@@ -733,33 +901,22 @@ function App(): React.JSX.Element {
         setFolders(localResult.folders)
         hasLocalData = true
 
-        // 로컬 폴더 정보로 먼저 UI 업데이트
-        const folderList = flattenFolders(localResult.folders)
-        const localFolderInfoPromises = folderList.map(async (folder) => {
-          try {
-            const infoResult = await window.electron.ipcRenderer.invoke(
-              'get-folder-info-local',
-              currentAccount,
-              folder.path
-            )
-            if (infoResult.success) {
-              return {
-                path: folder.path,
-                total: infoResult.total || 0,
-                unseen: infoResult.unseen || 0
-              }
-            }
-          } catch (e) {
-            console.error(`Failed to get local info for folder ${folder.path}:`, e)
-          }
-          return null
-        })
+        // 로컬 폴더 정보로 먼저 UI 업데이트 - 모든 폴더 카운트를 한 번에 조회
+        const allCountsResult = await window.electron.ipcRenderer.invoke(
+          'get-all-folder-counts-local',
+          currentAccount
+        )
 
-        const localInfoResults = await Promise.all(localFolderInfoPromises)
         const localInfos: Record<string, FolderInfo> = {}
-        for (const info of localInfoResults) {
-          if (info) {
-            localInfos[info.path] = info
+        if (allCountsResult.success && allCountsResult.counts) {
+          for (const [path, counts] of Object.entries(
+            allCountsResult.counts as Record<string, { total: number; unseen: number }>
+          )) {
+            localInfos[path] = {
+              path,
+              total: counts.total || 0,
+              unseen: counts.unseen || 0
+            }
           }
         }
         setFolderInfos(localInfos)
@@ -793,35 +950,22 @@ function App(): React.JSX.Element {
           if (result.success && result.folders) {
             setFolders(result.folders)
 
-            const folderList = flattenFolders(result.folders)
+            // 폴더 정보는 항상 로컬 DB에서 가져오기 (서버 정보가 아닌 로컬 기준)
+            const allCountsResult = await window.electron.ipcRenderer.invoke(
+              'get-all-folder-counts-local',
+              currentAccount
+            )
 
-            // 서버 폴더 정보로 UI 업데이트
-            const folderInfoPromises = folderList.map(async (folder) => {
-              try {
-                // 서버에서 최신 정보 가져오기
-                const infoResult = await window.electron.ipcRenderer.invoke(
-                  'get-folder-info',
-                  currentAccount,
-                  folder.path
-                )
-                if (infoResult.success) {
-                  return {
-                    path: folder.path,
-                    total: infoResult.total || 0,
-                    unseen: infoResult.unseen || 0
-                  }
-                }
-              } catch (e) {
-                console.error(`Failed to get server info for folder ${folder.path}:`, e)
-              }
-              return null
-            })
-
-            const folderInfoResults = await Promise.all(folderInfoPromises)
             const infos: Record<string, FolderInfo> = {}
-            for (const info of folderInfoResults) {
-              if (info) {
-                infos[info.path] = info
+            if (allCountsResult.success && allCountsResult.counts) {
+              for (const [path, counts] of Object.entries(
+                allCountsResult.counts as Record<string, { total: number; unseen: number }>
+              )) {
+                infos[path] = {
+                  path,
+                  total: counts.total || 0,
+                  unseen: counts.unseen || 0
+                }
               }
             }
             setFolderInfos(infos)
@@ -965,6 +1109,29 @@ function App(): React.JSX.Element {
           setEmails([])
           setTotalEmails(0)
         }
+      } else if (currentFolder === 'ALL_MAIL') {
+        // 전체메일함: 모든 폴더에서 메일 조회
+        const result = await window.electron.ipcRenderer.invoke(
+          'get-all-emails-local',
+          currentAccount,
+          { start, limit: emailsPerPage, unreadOnly: showUnreadOnly }
+        )
+
+        // 요청 ID가 변경되었으면 결과 무시
+        if (requestId !== loadEmailsRequestIdRef.current) {
+          console.log('[loadEmails] Request cancelled (stale), requestId:', requestId)
+          return
+        }
+
+        console.log('[loadEmails] All mail result:', result)
+        if (result.success) {
+          setEmails(result.emails || [])
+          setTotalEmails(result.total || 0)
+        } else {
+          console.error('Failed to load all emails:', result.error)
+          setEmails([])
+          setTotalEmails(0)
+        }
       } else {
         // Local-First: 먼저 로컬 DB에서 조회 (안읽은 메일만 필터링 옵션 포함)
         let result = await window.electron.ipcRenderer.invoke(
@@ -1086,62 +1253,47 @@ function App(): React.JSX.Element {
       console.log(`[handleAccountChange] Loading folders for ${email}`)
       const startTime = Date.now()
 
-      const result = await window.electron.ipcRenderer.invoke('get-folders', email)
+      // Local-First: 먼저 로컬 DB에서 폴더 조회
+      let result = await window.electron.ipcRenderer.invoke('get-folders-local', email)
+      // 로컬에 없으면 서버에서 가져오기 (폴백)
+      if (!result.success || result.folders.length === 0) {
+        console.log(`[handleAccountChange] Local folders empty, falling back to IMAP`)
+        result = await window.electron.ipcRenderer.invoke('get-folders', email)
+      } else {
+        console.log(`[handleAccountChange] Using local folders`)
+      }
       if (result.success && result.folders) {
         setFolders(result.folders)
         console.log(`[handleAccountChange] Folders loaded in ${Date.now() - startTime}ms`)
 
-        // 병렬로 처리: 폴더 정보 + 필터 카운트 + 이메일 로드
-        const folderList = flattenFolders(result.folders)
+        // 병렬로 처리: 폴더 정보 + 이메일 로드
+        // 1. 폴더 정보 조회 (Local-First) - 모든 폴더 카운트를 한 번에 조회
+        const folderCountsPromise = window.electron.ipcRenderer.invoke(
+          'get-all-folder-counts-local',
+          email
+        )
 
-        // 1. 폴더 정보 병렬 조회 (Local-First)
-        const folderInfoPromises = folderList.map(async (folder) => {
-          try {
-            // 먼저 로컬 DB에서 조회
-            let infoResult = await window.electron.ipcRenderer.invoke(
-              'get-folder-info-local',
-              email,
-              folder.path
-            )
-            // 로컬에 데이터가 없으면 서버에서 가져오기
-            if (!infoResult.success || (infoResult.total === 0 && infoResult.unseen === 0)) {
-              infoResult = await window.electron.ipcRenderer.invoke(
-                'get-folder-info',
-                email,
-                folder.path
-              )
-            }
-            if (infoResult.success) {
-              return {
-                path: folder.path,
-                total: infoResult.total || 0,
-                unseen: infoResult.unseen || 0
-              }
-            }
-          } catch (e) {
-            console.error(`Failed to get info for folder ${folder.path}:`, e)
-          }
-          return null
-        })
-
-        // 2. 이메일 로드
-        console.log(`[handleAccountChange] Loading emails for ${email}, folder: INBOX`)
-        const emailPromise = window.electron.ipcRenderer.invoke('get-emails', email, 'INBOX', {
+        // 2. 이메일 로드 (Local-First) - SQLite에서 조회
+        console.log(`[handleAccountChange] Loading emails from local DB for ${email}, folder: INBOX`)
+        const emailPromise = window.electron.ipcRenderer.invoke('get-emails-local', email, 'INBOX', {
           start: 1,
           limit: emailsPerPage
         })
 
         // 모든 병렬 작업 완료 대기
-        const [folderInfoResults, emailResult] = await Promise.all([
-          Promise.all(folderInfoPromises),
-          emailPromise
-        ])
+        const [allCountsResult, emailResult] = await Promise.all([folderCountsPromise, emailPromise])
 
         // 폴더 정보 설정
         const infos: Record<string, FolderInfo> = {}
-        for (const info of folderInfoResults) {
-          if (info) {
-            infos[info.path] = info
+        if (allCountsResult.success && allCountsResult.counts) {
+          for (const [path, counts] of Object.entries(
+            allCountsResult.counts as Record<string, { total: number; unseen: number }>
+          )) {
+            infos[path] = {
+              path,
+              total: counts.total || 0,
+              unseen: counts.unseen || 0
+            }
           }
         }
         setFolderInfos(infos)
@@ -1237,15 +1389,65 @@ function App(): React.JSX.Element {
   }
 
   const handleEmailSelect = async (email: EmailHeader) => {
+    // 현재 이메일의 인덱스 찾기 (가상 폴더에서는 UID + folder로 비교해야 함)
+    const index = emails.findIndex(
+      (e) => e.uid === email.uid && (!email.folder || e.folder === email.folder)
+    )
+    setSelectedEmailIndex(index)
+
+    // 필터 모드에서는 이메일의 폴더 정보 사용, 아니면 currentFolder 사용
+    const targetFolder = email.folder || currentFolder
+
+    // 즉시 UI 전환 및 로딩 상태 설정 (낙관적 업데이트)
+    setIsLoadingContent(true)
+
+    // 헤더 정보 기반으로 부분 데이터 먼저 표시 (빠른 피드백)
+    const partialEmail: EmailFull = {
+      uid: email.uid,
+      messageId: email.messageId,
+      subject: email.subject,
+      from: email.from,
+      to: email.to,
+      cc: [],
+      date: email.date,
+      flags: email.flags,
+      text: '', // 본문은 로딩 중
+      html: undefined,
+      attachments: [],
+      hasAttachment: email.hasAttachment,
+      folder: email.folder // 실제 폴더 경로 보존 (가상 폴더에서 필요)
+    }
+    setSelectedEmail(partialEmail)
+
+    // 목록만 보기 모드에서는 즉시 뷰 전환
+    if (viewMode === 'list') {
+      setCurrentView('view')
+    }
+
+    // 읽지 않은 메일인 경우 즉시 UI 업데이트 (낙관적 업데이트)
+    const wasUnread = !email.flags.includes('\\Seen')
+    if (wasUnread) {
+      setEmails((prev) =>
+        prev.map((e) =>
+          e.uid === email.uid && (!email.folder || e.folder === email.folder)
+            ? { ...e, flags: [...new Set([...e.flags, '\\Seen'])] }
+            : e
+        )
+      )
+      setFolderInfos((prev) => {
+        const current = prev[currentFolder]
+        if (current && current.unseen > 0) {
+          return {
+            ...prev,
+            [currentFolder]: { ...current, unseen: current.unseen - 1 }
+          }
+        }
+        return prev
+      })
+    }
+
     try {
-      // 현재 이메일의 인덱스 찾기
-      const index = emails.findIndex((e) => e.uid === email.uid)
-      setSelectedEmailIndex(index)
-
-      // 필터 모드에서는 이메일의 폴더 정보 사용, 아니면 currentFolder 사용
-      const targetFolder = email.folder || currentFolder
-
-      // Local-First: 먼저 로컬 캐시에서 조회
+      // Local-First: 먼저 로컬 캐시에서 조회 (비동기)
       let result = await window.electron.ipcRenderer.invoke(
         'get-email-content-local',
         currentAccount,
@@ -1261,45 +1463,26 @@ function App(): React.JSX.Element {
           email.uid
         )
       }
+
       if (result.success && result.email) {
         setSelectedEmail(result.email)
-        // 목록만 보기 모드에서만 뷰 전환 (분할 보기 모드에서는 오른쪽에 표시)
-        if (viewMode === 'list') {
-          setCurrentView('view')
-        }
+      }
 
-        // 읽지 않은 메일인 경우 자동으로 읽음 처리
-        if (!email.flags.includes('\\Seen')) {
-          // 서버에 읽음 플래그 추가
-          await window.electron.ipcRenderer.invoke(
-            'set-email-flags',
-            currentAccount,
-            targetFolder,
-            email.uid,
-            ['\\Seen'],
-            true
-          )
-          // 로컬 상태 업데이트
-          setEmails((prev) =>
-            prev.map((e) =>
-              e.uid === email.uid ? { ...e, flags: [...new Set([...e.flags, '\\Seen'])] } : e
-            )
-          )
-          // 폴더 안읽은 메일 수 업데이트
-          setFolderInfos((prev) => {
-            const current = prev[currentFolder]
-            if (current && current.unseen > 0) {
-              return {
-                ...prev,
-                [currentFolder]: { ...current, unseen: current.unseen - 1 }
-              }
-            }
-            return prev
-          })
-        }
+      // 읽음 처리는 백그라운드에서 실행 (UI 블로킹 없음)
+      if (wasUnread) {
+        window.electron.ipcRenderer.invoke(
+          'set-email-flags',
+          currentAccount,
+          targetFolder,
+          email.uid,
+          ['\\Seen'],
+          true
+        ).catch((err) => console.error('Failed to mark as read:', err))
       }
     } catch (error) {
       console.error('Failed to load email content:', error)
+    } finally {
+      setIsLoadingContent(false)
     }
   }
 
@@ -1328,6 +1511,9 @@ function App(): React.JSX.Element {
       folderPath = folderKey
     } else if (folderKey === 'inbox') {
       folderPath = 'INBOX'
+    } else if (folderKey === 'allMail') {
+      // 전체메일함 특수 처리
+      folderPath = 'ALL_MAIL'
     } else {
       // 폴더 목록에서 해당 폴더 찾기
       console.log(
@@ -1680,6 +1866,7 @@ function App(): React.JSX.Element {
   const getFolderName = (folderPath: string): string => {
     const folderNames: Record<string, string> = {
       INBOX: t('sidebar.inbox'),
+      ALL_MAIL: t('sidebar.allMail'),
       Sent: t('sidebar.sent'),
       보낸편지함: t('sidebar.sent'),
       'Sent Messages': t('sidebar.sent'),
@@ -1704,6 +1891,7 @@ function App(): React.JSX.Element {
   const getFolderCounts = () => {
     const counts: Record<string, { total: number; unseen: number }> = {
       inbox: { total: 0, unseen: 0 },
+      allMail: { total: 0, unseen: 0 },
       sent: { total: 0, unseen: 0 },
       drafts: { total: 0, unseen: 0 },
       trash: { total: 0, unseen: 0 },
@@ -1711,6 +1899,10 @@ function App(): React.JSX.Element {
       self: { total: 0, unseen: 0 },
       scheduled: { total: 0, unseen: 0 }
     }
+
+    // 전체 메일 수 계산 (모든 폴더 합계)
+    let allMailTotal = 0
+    let allMailUnseen = 0
 
     for (const [path, info] of Object.entries(folderInfos)) {
       const folder = flattenFolders(folders).find((f) => f.path === path)
@@ -1720,7 +1912,13 @@ function App(): React.JSX.Element {
           counts[key] = { total: info.total, unseen: info.unseen }
         }
       }
+      // 전체 메일 수에 합산
+      allMailTotal += info.total || 0
+      allMailUnseen += info.unseen || 0
     }
+
+    // 전체메일함 카운트 설정
+    counts.allMail = { total: allMailTotal, unseen: allMailUnseen }
 
     // INBOX 직접 매핑
     if (folderInfos['INBOX']) {
@@ -2383,8 +2581,14 @@ function App(): React.JSX.Element {
       false
     )
 
-    // 로컬 상태에서 삭제된 이메일 제거
-    setEmails((prev) => prev.filter((e) => e.uid !== selectedEmail.uid))
+    // 로컬 상태에서 삭제된 이메일 제거 (가상 폴더에서는 UID + folder로 비교)
+    setEmails((prev) =>
+      prev.filter(
+        (e) =>
+          e.uid !== selectedEmail.uid ||
+          (selectedEmail.folder && e.folder !== selectedEmail.folder)
+      )
+    )
     setTotalEmails((prev) => Math.max(0, prev - 1))
 
     // 폴더 카운트 업데이트
@@ -2427,19 +2631,25 @@ function App(): React.JSX.Element {
   const handleViewMarkUnread = async () => {
     if (!selectedEmail) return
 
+    // 가상 폴더(ALL_MAIL 등)에서는 실제 폴더 경로 사용
+    const actualFolder = selectedEmail.folder || currentFolder
+
     await window.electron.ipcRenderer.invoke(
       'set-email-flags',
       currentAccount,
-      currentFolder,
+      actualFolder,
       selectedEmail.uid,
       ['\\Seen'],
       false
     )
 
-    // 로컬 상태 업데이트
+    // 로컬 상태 업데이트 (가상 폴더에서는 UID + folder로 비교)
     setEmails((prev) =>
       prev.map((e) =>
-        e.uid === selectedEmail.uid ? { ...e, flags: e.flags.filter((f) => f !== '\\Seen') } : e
+        e.uid === selectedEmail.uid &&
+        (!selectedEmail.folder || e.folder === selectedEmail.folder)
+          ? { ...e, flags: e.flags.filter((f) => f !== '\\Seen') }
+          : e
       )
     )
 
@@ -2492,8 +2702,14 @@ function App(): React.JSX.Element {
       selectedEmail.uid
     )
 
-    // 로컬 상태에서 이동된 이메일 제거
-    setEmails((prev) => prev.filter((e) => e.uid !== selectedEmail.uid))
+    // 로컬 상태에서 이동된 이메일 제거 (가상 폴더에서는 UID + folder로 비교)
+    setEmails((prev) =>
+      prev.filter(
+        (e) =>
+          e.uid !== selectedEmail.uid ||
+          (selectedEmail.folder && e.folder !== selectedEmail.folder)
+      )
+    )
     setTotalEmails((prev) => Math.max(0, prev - 1))
 
     // 목록으로 돌아가기
@@ -2558,8 +2774,14 @@ function App(): React.JSX.Element {
       }
     }
 
-    // 로컬 상태에서 이동된 이메일 제거
-    setEmails((prev) => prev.filter((e) => e.uid !== selectedEmail.uid))
+    // 로컬 상태에서 이동된 이메일 제거 (가상 폴더에서는 UID + folder로 비교)
+    setEmails((prev) =>
+      prev.filter(
+        (e) =>
+          e.uid !== selectedEmail.uid ||
+          (selectedEmail.folder && e.folder !== selectedEmail.folder)
+      )
+    )
     setTotalEmails((prev) => Math.max(0, prev - 1))
 
     // 목록으로 돌아가기
@@ -2571,19 +2793,26 @@ function App(): React.JSX.Element {
   const handleViewToggleStar = async (starred: boolean) => {
     if (!selectedEmail) return
 
+    // 가상 폴더(ALL_MAIL 등)에서는 실제 폴더 경로 사용
+    const actualFolder = selectedEmail.folder || currentFolder
+
     await window.electron.ipcRenderer.invoke(
       'set-email-flags',
       currentAccount,
-      currentFolder,
+      actualFolder,
       selectedEmail.uid,
       ['\\Flagged'],
       starred
     )
 
-    // 로컬 상태 업데이트
+    // 로컬 상태 업데이트 (가상 폴더에서는 UID + folder로 비교)
     setEmails((prev) =>
       prev.map((e) => {
-        if (e.uid !== selectedEmail.uid) return e
+        if (
+          e.uid !== selectedEmail.uid ||
+          (selectedEmail.folder && e.folder !== selectedEmail.folder)
+        )
+          return e
         const newFlags = starred
           ? [...new Set([...e.flags, '\\Flagged'])]
           : e.flags.filter((f) => f !== '\\Flagged')
@@ -2916,9 +3145,9 @@ function App(): React.JSX.Element {
         return { success: false, processedCount: 0, error: '활성화된 필터가 없습니다.' }
       }
 
-      // INBOX의 모든 이메일 가져오기
+      // INBOX의 모든 이메일 가져오기 (Local-First)
       const result = await window.electron.ipcRenderer.invoke(
-        'get-emails',
+        'get-emails-local',
         currentAccount,
         'INBOX',
         { start: 1, limit: 1000 }
@@ -3101,16 +3330,16 @@ function App(): React.JSX.Element {
     console.log('[runSingleFilter] Current account:', currentAccount)
 
     try {
-      // INBOX의 모든 이메일 가져오기
-      console.log('[runSingleFilter] Fetching emails from INBOX...')
+      // INBOX의 모든 이메일 가져오기 (Local-First)
+      console.log('[runSingleFilter] Fetching emails from local DB...')
       const result = await window.electron.ipcRenderer.invoke(
-        'get-emails',
+        'get-emails-local',
         currentAccount,
         'INBOX',
         { start: 1, limit: 1000 }
       )
 
-      console.log('[runSingleFilter] get-emails result:', {
+      console.log('[runSingleFilter] get-emails-local result:', {
         success: result.success,
         emailCount: result.emails?.length || 0,
         error: result.error
@@ -3315,7 +3544,7 @@ function App(): React.JSX.Element {
       {isPinRequired && !isPinVerified && <PinScreen onVerified={handlePinVerified} />}
 
       {/* 잠금 화면 */}
-      {isLocked && <LockScreen onUnlock={handleUnlock} />}
+      {isLocked && <LockScreen onUnlock={handleUnlock} pinEnabled={isPinEnabledForLock} />}
 
       {/* 언어 선택 모달 (첫 실행 시) */}
       <LanguageSelector isOpen={showLanguageSelector} onClose={handleLanguageSelected} />
@@ -3372,6 +3601,261 @@ function App(): React.JSX.Element {
         onClose={() => setIsGlobalSettingsOpen(false)}
       />
 
+      {/* EmailView 상세 검색 다이얼로그 */}
+      <Dialog open={viewDetailedSearchOpen} onOpenChange={setViewDetailedSearchOpen} modal={false}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t('search.detailed')}</DialogTitle>
+            <DialogDescription>
+              {t('search.detailedDesc', 'Enter search criteria to filter emails.')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* 보낸사람 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('email.from')}</label>
+              <input
+                type="text"
+                value={viewDetailedSearch.sender}
+                onChange={(e) =>
+                  setViewDetailedSearch({ ...viewDetailedSearch, sender: e.target.value })
+                }
+                placeholder={t('search.senderPlaceholder')}
+                className="w-full h-9 px-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+              />
+            </div>
+
+            {/* 받는사람 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('email.to')}</label>
+              <div className="flex gap-2">
+                <Select
+                  value={viewDetailedSearch.recipientType}
+                  onValueChange={(value) =>
+                    setViewDetailedSearch({
+                      ...viewDetailedSearch,
+                      recipientType: value as 'to' | 'to_cc' | 'to_cc_bcc'
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-[160px]">
+                    <span>
+                      {viewDetailedSearch.recipientType === 'to' && t('email.to')}
+                      {viewDetailedSearch.recipientType === 'to_cc' &&
+                        `${t('email.to')} + ${t('compose.cc')}`}
+                      {viewDetailedSearch.recipientType === 'to_cc_bcc' && t('search.periodAll')}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="to">{t('email.to')}</SelectItem>
+                    <SelectItem value="to_cc">
+                      {t('email.to')} + {t('compose.cc')}
+                    </SelectItem>
+                    <SelectItem value="to_cc_bcc">{t('search.periodAll')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <input
+                  type="text"
+                  value={viewDetailedSearch.recipient}
+                  onChange={(e) =>
+                    setViewDetailedSearch({ ...viewDetailedSearch, recipient: e.target.value })
+                  }
+                  placeholder={t('search.recipientPlaceholder')}
+                  className="flex-1 h-9 px-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                />
+              </div>
+            </div>
+
+            {/* 내용 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('search.contentPlaceholder')}</label>
+              <div className="flex gap-2">
+                <Select
+                  value={viewDetailedSearch.contentType}
+                  onValueChange={(value) =>
+                    setViewDetailedSearch({
+                      ...viewDetailedSearch,
+                      contentType: value as 'all' | 'subject' | 'body'
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-[160px]">
+                    <span>
+                      {viewDetailedSearch.contentType === 'all' && t('search.periodAll')}
+                      {viewDetailedSearch.contentType === 'subject' && t('email.subject')}
+                      {viewDetailedSearch.contentType === 'body' && t('compose.body')}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">{t('search.periodAll')}</SelectItem>
+                    <SelectItem value="subject">{t('email.subject')}</SelectItem>
+                    <SelectItem value="body">{t('compose.body')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <input
+                  type="text"
+                  value={viewDetailedSearch.content}
+                  onChange={(e) =>
+                    setViewDetailedSearch({ ...viewDetailedSearch, content: e.target.value })
+                  }
+                  placeholder={t('search.contentPlaceholder')}
+                  className="flex-1 h-9 px-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                />
+              </div>
+            </div>
+
+            {/* 메일함 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('search.mailbox')}</label>
+              <Select
+                value={viewDetailedSearch.mailbox}
+                onValueChange={(value) =>
+                  setViewDetailedSearch({ ...viewDetailedSearch, mailbox: value })
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <span>
+                    {viewDetailedSearch.mailbox === 'all'
+                      ? t('search.periodAll')
+                      : [...inboxSubFolders, ...customFolders].find(
+                          (f) => f.path === viewDetailedSearch.mailbox
+                        )?.name || viewDetailedSearch.mailbox}
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('search.periodAll')}</SelectItem>
+                  {[...inboxSubFolders, ...customFolders].map((folder) => (
+                    <SelectItem key={folder.path} value={folder.path}>
+                      {folder.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* 기간 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">{t('search.period')}</label>
+              <div className="flex gap-2">
+                <Select
+                  value={viewDetailedSearch.periodType}
+                  onValueChange={(value) => {
+                    setViewDetailedSearch({
+                      ...viewDetailedSearch,
+                      periodType: value as DetailedSearchParams['periodType']
+                    })
+                    if (value !== 'custom') {
+                      setViewDetailedSearch((prev) => ({ ...prev, startDate: '', endDate: '' }))
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-[100px]">
+                    <span>
+                      {viewDetailedSearch.periodType === 'all' && t('search.periodAll')}
+                      {viewDetailedSearch.periodType === '1week' && t('search.period1Week')}
+                      {viewDetailedSearch.periodType === '1month' && t('search.period1Month')}
+                      {viewDetailedSearch.periodType === '3months' && t('search.period3Months')}
+                      {viewDetailedSearch.periodType === '6months' && t('search.period6Months')}
+                      {viewDetailedSearch.periodType === '1year' && t('search.period1Year')}
+                      {viewDetailedSearch.periodType === 'custom' && t('search.periodCustom')}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">{t('search.periodAll')}</SelectItem>
+                    <SelectItem value="1week">{t('search.period1Week')}</SelectItem>
+                    <SelectItem value="1month">{t('search.period1Month')}</SelectItem>
+                    <SelectItem value="3months">{t('search.period3Months')}</SelectItem>
+                    <SelectItem value="6months">{t('search.period6Months')}</SelectItem>
+                    <SelectItem value="1year">{t('search.period1Year')}</SelectItem>
+                    <SelectItem value="custom">{t('search.periodCustom')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                {viewDetailedSearch.periodType === 'custom' && (
+                  <div className="flex items-center gap-2 flex-1">
+                    <div className="relative flex-1">
+                      <input
+                        type="date"
+                        value={viewDetailedSearch.startDate}
+                        onChange={(e) =>
+                          setViewDetailedSearch({ ...viewDetailedSearch, startDate: e.target.value })
+                        }
+                        className="w-full h-9 px-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                      />
+                    </div>
+                    <span className="text-muted-foreground">~</span>
+                    <div className="relative flex-1">
+                      <input
+                        type="date"
+                        value={viewDetailedSearch.endDate}
+                        onChange={(e) =>
+                          setViewDetailedSearch({ ...viewDetailedSearch, endDate: e.target.value })
+                        }
+                        className="w-full h-9 px-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 체크박스 옵션 */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox
+                  checked={viewDetailedSearch.hasAttachment}
+                  onCheckedChange={(checked) =>
+                    setViewDetailedSearch({ ...viewDetailedSearch, hasAttachment: !!checked })
+                  }
+                />
+                <span className="text-sm">{t('search.hasAttachment')}</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox
+                  checked={viewDetailedSearch.includeTrashSpam}
+                  onCheckedChange={(checked) =>
+                    setViewDetailedSearch({ ...viewDetailedSearch, includeTrashSpam: !!checked })
+                  }
+                />
+                <span className="text-sm">{t('search.includeTrashSpam')}</span>
+              </label>
+            </div>
+
+            {/* 버튼 */}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setViewDetailedSearch({
+                    sender: '',
+                    recipientType: 'to',
+                    recipient: '',
+                    contentType: 'all',
+                    content: '',
+                    mailbox: 'all',
+                    periodType: 'all',
+                    startDate: '',
+                    endDate: '',
+                    hasAttachment: false,
+                    includeTrashSpam: false
+                  })
+                }
+              >
+                {t('common.reset')}
+              </Button>
+              <Button
+                onClick={() => {
+                  handleDetailedSearch(viewDetailedSearch)
+                  setViewDetailedSearchOpen(false)
+                }}
+              >
+                <Search className="h-4 w-4 mr-1" />
+                {t('common.search')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {appView === 'contacts' ? (
         <AddressBook accountEmail={currentAccount} onComposeToContact={handleComposeToContact} />
       ) : (
@@ -3396,6 +3880,7 @@ function App(): React.JSX.Element {
             }}
             onDropEmails={handleMoveEmails}
             onUnreadCountClick={handleUnreadCountClick}
+            currentFolder={currentFolder}
           />
           {settingsView === 'settings-general' ? (
             <BasicSettings
@@ -3454,6 +3939,7 @@ function App(): React.JSX.Element {
             // 목록만 보기 모드: 이메일 전체 화면 보기
             <EmailView
               currentAccount={currentAccount}
+              isLoadingContent={isLoadingContent}
               email={{
                 id: String(selectedEmail.uid),
                 uid: selectedEmail.uid,
@@ -3498,6 +3984,11 @@ function App(): React.JSX.Element {
               onAutoClassifySender={handleAutoClassifySender}
               onDeleteAllFromSender={handleDeleteAllFromSender}
               onHighlightSender={handleHighlightSender}
+              onDetailedSearch={() => setViewDetailedSearchOpen(true)}
+              onSearch={(query) => {
+                setSearchQuery(query)
+                setIsSearching(true)
+              }}
             />
           ) : viewMode === 'split' ? (
             // 좌우 분할 보기 모드
@@ -3524,8 +4015,19 @@ function App(): React.JSX.Element {
                     <input
                       type="text"
                       placeholder={t('common.searchPlaceholder')}
-                      className="w-[200px] h-9 px-3 pr-8 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                      value={splitGlobalFilter}
+                      onChange={(e) => setSplitGlobalFilter(e.target.value)}
+                      className={`w-[200px] h-9 px-3 pr-16 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary ${splitGlobalFilter ? 'border-primary' : ''}`}
                     />
+                    {splitGlobalFilter ? (
+                      <button
+                        type="button"
+                        className="absolute right-8 top-1/2 -translate-y-1/2 p-1 hover:bg-muted rounded"
+                        onClick={() => setSplitGlobalFilter('')}
+                      >
+                        <X className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    ) : null}
                     <div className="absolute right-2 top-1/2 -translate-y-1/2">
                       <Search className="h-4 w-4 text-muted-foreground" />
                     </div>
@@ -3536,7 +4038,7 @@ function App(): React.JSX.Element {
                     className="h-9 gap-1"
                     onClick={() => setSplitDetailedSearchOpen(true)}
                   >
-                    {t('email.detail')}
+                    {t('search.detailed')}
                     <ChevronDown className="h-3 w-3" />
                   </Button>
                 </div>
@@ -3576,6 +4078,8 @@ function App(): React.JSX.Element {
                     onDetailedSearch={handleDetailedSearch}
                     detailedSearchOpen={splitDetailedSearchOpen}
                     onDetailedSearchOpenChange={setSplitDetailedSearchOpen}
+                    externalFilter={splitGlobalFilter}
+                    onExternalFilterChange={setSplitGlobalFilter}
                     onDelete={(uids) => handleDeleteEmails(uids, false)}
                     onPermanentDelete={(uids) => handleDeleteEmails(uids, true)}
                     onMarkRead={async (uids, read) => {
@@ -3588,10 +4092,13 @@ function App(): React.JSX.Element {
                       const affectedCount = affectedEmails.length
 
                       for (const uid of uids) {
+                        // 가상 폴더(ALL_MAIL 등)에서는 각 이메일의 실제 폴더 사용
+                        const email = emails.find((e) => e.uid === uid)
+                        const actualFolder = email?.folder || currentFolder
                         await window.electron.ipcRenderer.invoke(
                           'set-email-flags',
                           currentAccount,
-                          currentFolder,
+                          actualFolder,
                           uid,
                           ['\\Seen'],
                           read
@@ -3627,10 +4134,13 @@ function App(): React.JSX.Element {
                       }
                     }}
                     onToggleStar={async (uid, starred) => {
+                      // 가상 폴더(ALL_MAIL 등)에서는 이메일의 실제 폴더 사용
+                      const email = emails.find((e) => e.uid === uid)
+                      const actualFolder = email?.folder || currentFolder
                       await window.electron.ipcRenderer.invoke(
                         'set-email-flags',
                         currentAccount,
-                        currentFolder,
+                        actualFolder,
                         uid,
                         ['\\Flagged'],
                         starred
@@ -3682,6 +4192,7 @@ function App(): React.JSX.Element {
                     <EmailView
                       compactMode={true}
                       currentAccount={currentAccount}
+                      isLoadingContent={isLoadingContent}
                       email={{
                         id: String(selectedEmail.uid),
                         uid: selectedEmail.uid,
@@ -3729,6 +4240,10 @@ function App(): React.JSX.Element {
                       onAutoClassifySender={handleAutoClassifySender}
                       onDeleteAllFromSender={handleDeleteAllFromSender}
                       onHighlightSender={handleHighlightSender}
+                      onDetailedSearch={() => setSplitDetailedSearchOpen(true)}
+                      onSearch={(query) => {
+                        setSplitGlobalFilter(query)
+                      }}
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -3772,10 +4287,13 @@ function App(): React.JSX.Element {
                 const affectedCount = affectedEmails.length
 
                 for (const uid of uids) {
+                  // 가상 폴더(ALL_MAIL 등)에서는 각 이메일의 실제 폴더 사용
+                  const email = emails.find((e) => e.uid === uid)
+                  const actualFolder = email?.folder || currentFolder
                   await window.electron.ipcRenderer.invoke(
                     'set-email-flags',
                     currentAccount,
-                    currentFolder,
+                    actualFolder,
                     uid,
                     ['\\Seen'],
                     read
@@ -3811,10 +4329,13 @@ function App(): React.JSX.Element {
                 }
               }}
               onToggleStar={async (uid, starred) => {
+                // 가상 폴더(ALL_MAIL 등)에서는 이메일의 실제 폴더 사용
+                const email = emails.find((e) => e.uid === uid)
+                const actualFolder = email?.folder || currentFolder
                 await window.electron.ipcRenderer.invoke(
                   'set-email-flags',
                   currentAccount,
-                  currentFolder,
+                  actualFolder,
                   uid,
                   ['\\Flagged'],
                   starred

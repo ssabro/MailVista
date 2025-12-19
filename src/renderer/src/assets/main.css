@@ -3,36 +3,300 @@
 @tailwind utilities;
 
 @layer base {
+  /* ===== Base Variables ===== */
   :root {
-    /* Haze Color Palette */
-    /* #0F6BAE, #248BD6, #83B8FF, #C6CDFF */
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 206 84% 37%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 233 100% 96%;
-    --secondary-foreground: 206 84% 25%;
-    --muted: 214 60% 95%;
-    --muted-foreground: 206 40% 40%;
-    --accent: 214 100% 76%;
-    --accent-foreground: 206 84% 20%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214 40% 88%;
-    --input: 214 40% 88%;
-    --ring: 207 71% 49%;
     --radius: 0.5rem;
-
-    /* Custom Haze palette colors */
-    --haze-deep: 206 84% 37%;
-    --haze-medium: 207 71% 49%;
-    --haze-light: 214 100% 76%;
-    --haze-pale: 233 100% 89%;
   }
+}
+
+/* ===== Theme Color Variables ===== */
+/* Light mode selectors come first, dark mode overrides below */
+
+/* ===== Haze Theme (Light) - Default ===== */
+html,
+html.theme-haze {
+  /* Haze Color Palette - Blue */
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 206 84% 37%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 233 100% 96%;
+  --secondary-foreground: 206 84% 25%;
+  --muted: 214 60% 95%;
+  --muted-foreground: 206 40% 40%;
+  --accent: 214 100% 76%;
+  --accent-foreground: 206 84% 20%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214 40% 88%;
+  --input: 214 40% 88%;
+  --ring: 207 71% 49%;
+
+  /* Custom palette colors */
+  --haze-deep: 206 84% 37%;
+  --haze-medium: 207 71% 49%;
+  --haze-light: 214 100% 76%;
+  --haze-pale: 233 100% 89%;
+}
+
+/* ===== Forest Theme (Light) ===== */
+html.theme-forest {
+  --background: 0 0% 100%;
+  --foreground: 150 30% 6%;
+  --card: 0 0% 100%;
+  --card-foreground: 150 30% 6%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 150 30% 6%;
+  --primary: 142 76% 36%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 138 76% 93%;
+  --secondary-foreground: 142 76% 25%;
+  --muted: 140 50% 94%;
+  --muted-foreground: 142 30% 40%;
+  --accent: 142 70% 80%;
+  --accent-foreground: 142 76% 20%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 140 30% 85%;
+  --input: 140 30% 85%;
+  --ring: 142 76% 36%;
+
+  --haze-deep: 142 76% 36%;
+  --haze-medium: 142 70% 45%;
+  --haze-light: 142 70% 75%;
+  --haze-pale: 138 76% 90%;
+}
+
+/* ===== Sunset Theme (Light) ===== */
+html.theme-sunset {
+  --background: 0 0% 100%;
+  --foreground: 20 30% 8%;
+  --card: 0 0% 100%;
+  --card-foreground: 20 30% 8%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 20 30% 8%;
+  --primary: 24 95% 53%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 30 100% 93%;
+  --secondary-foreground: 24 95% 35%;
+  --muted: 30 60% 94%;
+  --muted-foreground: 24 30% 40%;
+  --accent: 30 100% 78%;
+  --accent-foreground: 24 95% 25%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 30 40% 85%;
+  --input: 30 40% 85%;
+  --ring: 24 95% 53%;
+
+  --haze-deep: 24 95% 53%;
+  --haze-medium: 24 90% 60%;
+  --haze-light: 30 100% 78%;
+  --haze-pale: 30 100% 90%;
+}
+
+/* ===== Lavender Theme (Light) ===== */
+html.theme-lavender {
+  --background: 0 0% 100%;
+  --foreground: 270 30% 8%;
+  --card: 0 0% 100%;
+  --card-foreground: 270 30% 8%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 270 30% 8%;
+  --primary: 270 75% 55%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 270 80% 95%;
+  --secondary-foreground: 270 75% 35%;
+  --muted: 270 50% 95%;
+  --muted-foreground: 270 30% 40%;
+  --accent: 270 80% 82%;
+  --accent-foreground: 270 75% 25%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 270 30% 88%;
+  --input: 270 30% 88%;
+  --ring: 270 75% 55%;
+
+  --haze-deep: 270 75% 55%;
+  --haze-medium: 270 70% 62%;
+  --haze-light: 270 80% 80%;
+  --haze-pale: 270 80% 92%;
+}
+
+/* ===== Rose Theme (Light) ===== */
+html.theme-rose {
+  --background: 0 0% 100%;
+  --foreground: 350 30% 8%;
+  --card: 0 0% 100%;
+  --card-foreground: 350 30% 8%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 350 30% 8%;
+  --primary: 350 89% 50%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 350 100% 95%;
+  --secondary-foreground: 350 89% 35%;
+  --muted: 350 50% 95%;
+  --muted-foreground: 350 30% 40%;
+  --accent: 350 100% 82%;
+  --accent-foreground: 350 89% 25%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 350 30% 88%;
+  --input: 350 30% 88%;
+  --ring: 350 89% 50%;
+
+  --haze-deep: 350 89% 50%;
+  --haze-medium: 350 85% 58%;
+  --haze-light: 350 100% 80%;
+  --haze-pale: 350 100% 92%;
+}
+
+/* ===== Dark Mode Themes ===== */
+/* Dark mode selectors override light mode */
+
+/* ===== Haze Theme (Dark) ===== */
+html.dark,
+html.dark.theme-haze {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 6%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 6%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 207 71% 49%;
+  --primary-foreground: 222.2 84% 4.9%;
+  --secondary: 217 33% 17%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217 33% 17%;
+  --muted-foreground: 215 20% 65%;
+  --accent: 217 33% 20%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 50.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217 33% 20%;
+  --input: 217 33% 20%;
+  --ring: 207 71% 49%;
+
+  --haze-deep: 207 71% 49%;
+  --haze-medium: 206 84% 60%;
+  --haze-light: 214 100% 76%;
+  --haze-pale: 233 100% 89%;
+}
+
+/* ===== Forest Theme (Dark) ===== */
+html.dark.theme-forest {
+  --background: 150 30% 5%;
+  --foreground: 138 40% 95%;
+  --card: 150 30% 7%;
+  --card-foreground: 138 40% 95%;
+  --popover: 150 30% 7%;
+  --popover-foreground: 138 40% 95%;
+  --primary: 142 70% 45%;
+  --primary-foreground: 150 30% 5%;
+  --secondary: 150 30% 15%;
+  --secondary-foreground: 138 40% 95%;
+  --muted: 150 30% 15%;
+  --muted-foreground: 140 20% 60%;
+  --accent: 150 30% 18%;
+  --accent-foreground: 138 40% 95%;
+  --destructive: 0 62.8% 50.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 150 30% 18%;
+  --input: 150 30% 18%;
+  --ring: 142 70% 45%;
+
+  --haze-deep: 142 70% 45%;
+  --haze-medium: 142 70% 55%;
+  --haze-light: 142 70% 75%;
+  --haze-pale: 138 76% 90%;
+}
+
+/* ===== Sunset Theme (Dark) ===== */
+html.dark.theme-sunset {
+  --background: 20 30% 5%;
+  --foreground: 30 40% 95%;
+  --card: 20 30% 7%;
+  --card-foreground: 30 40% 95%;
+  --popover: 20 30% 7%;
+  --popover-foreground: 30 40% 95%;
+  --primary: 24 90% 55%;
+  --primary-foreground: 20 30% 5%;
+  --secondary: 20 30% 15%;
+  --secondary-foreground: 30 40% 95%;
+  --muted: 20 30% 15%;
+  --muted-foreground: 30 20% 60%;
+  --accent: 20 30% 18%;
+  --accent-foreground: 30 40% 95%;
+  --destructive: 0 62.8% 50.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 20 30% 18%;
+  --input: 20 30% 18%;
+  --ring: 24 90% 55%;
+
+  --haze-deep: 24 90% 55%;
+  --haze-medium: 24 90% 65%;
+  --haze-light: 30 100% 78%;
+  --haze-pale: 30 100% 90%;
+}
+
+/* ===== Lavender Theme (Dark) ===== */
+html.dark.theme-lavender {
+  --background: 270 30% 5%;
+  --foreground: 270 40% 95%;
+  --card: 270 30% 7%;
+  --card-foreground: 270 40% 95%;
+  --popover: 270 30% 7%;
+  --popover-foreground: 270 40% 95%;
+  --primary: 270 70% 60%;
+  --primary-foreground: 270 30% 5%;
+  --secondary: 270 30% 15%;
+  --secondary-foreground: 270 40% 95%;
+  --muted: 270 30% 15%;
+  --muted-foreground: 270 20% 60%;
+  --accent: 270 30% 18%;
+  --accent-foreground: 270 40% 95%;
+  --destructive: 0 62.8% 50.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 270 30% 18%;
+  --input: 270 30% 18%;
+  --ring: 270 70% 60%;
+
+  --haze-deep: 270 70% 60%;
+  --haze-medium: 270 70% 70%;
+  --haze-light: 270 80% 80%;
+  --haze-pale: 270 80% 92%;
+}
+
+/* ===== Rose Theme (Dark) ===== */
+html.dark.theme-rose {
+  --background: 350 30% 5%;
+  --foreground: 350 40% 95%;
+  --card: 350 30% 7%;
+  --card-foreground: 350 40% 95%;
+  --popover: 350 30% 7%;
+  --popover-foreground: 350 40% 95%;
+  --primary: 350 85% 55%;
+  --primary-foreground: 350 30% 5%;
+  --secondary: 350 30% 15%;
+  --secondary-foreground: 350 40% 95%;
+  --muted: 350 30% 15%;
+  --muted-foreground: 350 20% 60%;
+  --accent: 350 30% 18%;
+  --accent-foreground: 350 40% 95%;
+  --destructive: 0 62.8% 50.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 350 30% 18%;
+  --input: 350 30% 18%;
+  --ring: 350 85% 55%;
+
+  --haze-deep: 350 85% 55%;
+  --haze-medium: 350 85% 65%;
+  --haze-light: 350 100% 80%;
+  --haze-pale: 350 100% 92%;
 }
 
 @layer base {
@@ -241,4 +505,63 @@
 /* 링크 툴팁 저장 버튼 */
 .ql-snow .ql-tooltip.ql-editing a.ql-action::after {
   content: '저장';
+}
+
+/* ===== Dark Mode Styles ===== */
+.dark .quill .ql-editor.ql-blank::before {
+  color: hsl(var(--muted-foreground));
+}
+
+.dark .quill .ql-toolbar {
+  background: hsl(var(--card));
+}
+
+.dark .quill .ql-editor {
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+}
+
+.dark .ql-snow .ql-stroke {
+  stroke: hsl(var(--foreground));
+}
+
+.dark .ql-snow .ql-fill {
+  fill: hsl(var(--foreground));
+}
+
+.dark .ql-snow .ql-picker {
+  color: hsl(var(--foreground));
+}
+
+.dark .ql-snow .ql-picker-options {
+  background: hsl(var(--popover));
+  border-color: hsl(var(--border));
+}
+
+.dark .ql-snow .ql-picker-item:hover {
+  background: hsl(var(--accent));
+}
+
+.dark .ql-editor td,
+.dark .ql-editor th {
+  border-color: hsl(var(--border));
+}
+
+.dark .ql-toolbar button:hover::after,
+.dark .ql-toolbar .ql-picker:hover::after {
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+}
+
+.dark .ql-snow .ql-tooltip {
+  background: hsl(var(--popover));
+  border-color: hsl(var(--border));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.dark .ql-snow .ql-tooltip input[type='text'] {
+  background: hsl(var(--input));
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
 }

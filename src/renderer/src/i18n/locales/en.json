@@ -40,7 +40,10 @@
   "notification": {
     "newMailTitle": "New mail {{count}}",
     "newMailBodySingle": "From: {{from}}\nSubject: {{subject}}",
-    "newMailBodyMulti": "From: {{from}} and {{count}} others"
+    "newMailBodyMulti": "From: {{from}} and {{count}} others",
+    "newMailTitleWithAccount": "[{{account}}] New mail {{count}}",
+    "newMailBodySingleWithAccount": "Account: {{account}}\nFrom: {{from}}\nSubject: {{subject}}",
+    "newMailBodyMultiWithAccount": "Account: {{account}}\nFrom: {{from}} and {{count}} others"
   },
   "header": {
     "mail": "Mail",
@@ -57,6 +60,7 @@
     "starred": "Starred",
     "attachment": "Attachments",
     "inbox": "Inbox",
+    "allMail": "All Mail",
     "sent": "Sent",
     "drafts": "Drafts",
     "scheduled": "Scheduled",
@@ -92,6 +96,22 @@
     "e2e": "E2E Encryption",
     "language": "Language",
     "languageDesc": "Select the language for the application.",
+    "appearance": {
+      "title": "Appearance",
+      "desc": "Configure the theme and colors for the application.",
+      "themeMode": "Theme Mode",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System",
+      "colorPalette": "Color Palette",
+      "palettes": {
+        "haze": "Haze",
+        "forest": "Forest",
+        "sunset": "Sunset",
+        "lavender": "Lavender",
+        "rose": "Rose"
+      }
+    },
     "loadingSettings": "Loading settings...",
     "resetConfirm": "Reset settings to defaults?",
     "saveComplete": "Save Complete",
@@ -297,6 +317,7 @@
     "saveAsEml": "Save as EML",
     "noEmails": "No emails",
     "loadingEmails": "Loading emails...",
+    "loadingContent": "Loading email content...",
     "switchingAccount": "Please wait.\nSwitching account...",
     "selectEmail": "Select an email",
     "sending": "Sending...",
@@ -1245,7 +1266,13 @@
       "days": "{{count}} days",
       "openFolder": "Open Log Folder",
       "export": "Export Logs",
-      "clear": "Clear Logs"
+      "clear": "Clear Logs",
+      "levels": {
+        "debug": "Detailed (Developer)",
+        "info": "Normal",
+        "warn": "Warnings Only",
+        "error": "Errors Only"
+      }
     },
     "updates": {
       "title": "Update Settings",
@@ -1268,7 +1295,9 @@
     "cache": {
       "title": "Cache Management",
       "description": "Delete app cache to free up storage space.",
-      "clear": "Clear Cache"
+      "clear": "Clear Cache",
+      "empty": "No cache to clear.",
+      "cleared": "{{files}} file(s) ({{size}}) deleted"
     },
     "storage": {
       "title": "Email Storage",
@@ -1296,7 +1325,12 @@
     "uploadFailed": "Upload failed: {{files}}",
     "expiresIn14Days": "Links will expire in 14 days.",
     "downloadLinks": "Large Attachment Downloads",
+    "download": "Download",
+    "fileCount": "{{count}} file(s)",
+    "linkExpiryNote": "※ Links may expire after a certain period.",
     "transferShNote": "Transfer.sh requires no login. Files are stored for 14 days.",
+    "selectService": "Select upload service",
+    "googleDriveNote": "Files will be uploaded to your Gmail account's Google Drive.",
     "googleDriveSetup": "Connect Google Drive",
     "googleDriveSetupDesc": "Create OAuth credentials in Google Cloud Console and enter them below.",
     "clientId": "Client ID",
@@ -1343,10 +1377,14 @@
     "dangerousFileWarning": "This file may contain malicious code. Only download if you trust the sender.",
     "downloadAnyway": "Download Anyway",
     "suspiciousLink": "Suspicious Link",
+    "suspiciousLinkDesc": "This link may be dangerous. Do you want to continue?",
+    "externalLinkConfirm": "Open External Link",
+    "externalLinkDesc": "Clicking this link will open it in an external browser.",
     "linkDestination": "Link destination",
     "internationalizedDomain": "Internationalized Domain (IDN)",
     "actualDomain": "Actual domain",
     "openAnyway": "Open Anyway",
+    "openLink": "Open Link",
     "emailAuthStatus": "Email Authentication Status",
     "authVerified": "Verified",
     "authFailed": "Failed",

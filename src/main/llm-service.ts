@@ -4,6 +4,7 @@ import {
   getAISettings,
   markProviderValidated
 } from './llm-settings'
+import { logger, LogCategory } from './logger'
 
 // ============================================
 // Types
@@ -620,16 +621,15 @@ export async function summarizeEmail(
       const summary = parseJsonWithRecovery(jsonString)
 
       if (!summary) {
-        console.error(
-          '[LLM] Failed to parse JSON even after recovery:',
-          jsonString.substring(0, 300)
-        )
+        logger.error(LogCategory.LLM, 'Failed to parse JSON even after recovery', {
+          preview: jsonString.substring(0, 300)
+        })
         return { success: false, error: 'Failed to parse summary response' }
       }
 
       // 필수 필드 검증
       if (typeof summary.summary !== 'string') {
-        console.error('[LLM] Invalid summary format: missing summary field')
+        logger.error(LogCategory.LLM, 'Invalid summary format: missing summary field')
         return { success: false, error: 'Invalid summary format' }
       }
 
@@ -643,15 +643,15 @@ export async function summarizeEmail(
       return { success: true, summary }
     }
 
-    console.error('[LLM] Failed to extract JSON from response:', content.substring(0, 300))
+    logger.error(LogCategory.LLM, 'Failed to extract JSON from response', {
+      preview: content.substring(0, 300)
+    })
     return { success: false, error: 'Failed to parse summary response' }
   } catch (parseError) {
-    console.error(
-      '[LLM] JSON parse error:',
-      parseError,
-      'Content:',
-      response.content?.substring(0, 300)
-    )
+    logger.error(LogCategory.LLM, 'JSON parse error', {
+      error: parseError instanceof Error ? parseError.message : String(parseError),
+      preview: response.content?.substring(0, 300)
+    })
     return { success: false, error: 'Failed to parse summary response' }
   }
 }

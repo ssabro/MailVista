@@ -338,6 +338,24 @@ export class OperationWorker {
   ): Promise<void> {
     if (!this.imapFunctions) throw new Error('IMAP functions not configured')
 
+    // Gmail의 "All Mail" 폴더는 IMAP에서 직접 삭제 불가 (가상 폴더)
+    // 로컬 DB에서는 이미 삭제 완료됨 - IMAP 작업은 스킵
+    const gmailAllMailPatterns = [
+      /^\[Gmail\]\/All Mail$/i,
+      /^\[Gmail\]\/전체보관함$/,
+      /^\[Gmail\]\/모든 메일$/,
+      /^\[Google Mail\]\/All Mail$/i,
+      /^\[Google Mail\]\/전체보관함$/,
+      /^\[Google Mail\]\/모든 메일$/
+    ]
+    if (gmailAllMailPatterns.some((pattern) => pattern.test(operation.folder_path))) {
+      logger.info(LogCategory.SYNC, 'Skipping Gmail All Mail folder delete operation (not supported)', {
+        folderPath: operation.folder_path,
+        uidCount: uids.length
+      })
+      return // 성공으로 처리 (로컬 DB에서는 이미 처리됨)
+    }
+
     if (uids.length === 1) {
       const result = await this.imapFunctions.deleteEmail(
         operation.account_email,

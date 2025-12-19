@@ -6,6 +6,7 @@
  * @see storage/offline-repository.ts for SQLite storage
  */
 import { BrowserWindow } from 'electron'
+import { logger, LogCategory } from './logger'
 import {
   getOfflineSettings as repoGetOfflineSettings,
   updateOfflineSettings as repoUpdateOfflineSettings,
@@ -192,9 +193,11 @@ export function getOnlineStatus(): boolean {
 export function setOnlineStatus(status: boolean) {
   const wasOffline = !isOnline
   isOnline = status
+  logger.info(LogCategory.OFFLINE, 'Online status changed', { isOnline: status, wasOffline })
 
   // 오프라인에서 온라인으로 변경되면 대기 중인 이메일 발송
   if (wasOffline && status) {
+    logger.info(LogCategory.OFFLINE, 'Back online, processing pending emails')
     processPendingEmails()
   }
 
@@ -254,6 +257,8 @@ export function cacheEmails(
 ) {
   const settings = getOfflineSettings()
   if (!settings.enabled) return
+
+  logger.debug(LogCategory.CACHE, 'Caching emails', { accountEmail, folderPath, count: emails.length, total })
 
   // 최대 개수 제한
   const limitedEmails = emails.slice(0, settings.maxEmailsPerFolder)
@@ -349,6 +354,7 @@ export function getCachedFolderList(accountEmail: string): AccountCache['folderL
 export function addPendingEmail(
   email: Omit<PendingEmail, 'id' | 'createdAt' | 'retryCount'>
 ): string {
+  logger.info(LogCategory.OFFLINE, 'Adding pending email', { accountEmail: email.accountEmail, subject: email.subject })
   const result = repoAddPendingEmail(email.accountEmail, {
     toAddresses: email.to,
     ccAddresses: email.cc,
@@ -359,6 +365,7 @@ export function addPendingEmail(
     attachments: email.attachments
   })
 
+  logger.debug(LogCategory.OFFLINE, 'Pending email added', { id: result.pending?.id })
   return result.pending?.id || ''
 }
 
@@ -431,7 +438,10 @@ async function processPendingEmails() {
         }
       }
     } catch (error) {
-      console.error('Failed to send pending email:', error)
+      logger.error(LogCategory.OFFLINE, 'Failed to send pending email', {
+        emailId: email.id,
+        error: error instanceof Error ? error.message : String(error)
+      })
       incrementPendingRetry(email.id, String(error))
     }
   }
@@ -453,6 +463,7 @@ export function getCacheSize(accountEmail?: string): number {
 }
 
 export function clearCache(accountEmail?: string) {
+  logger.info(LogCategory.CACHE, 'Clearing cache', { accountEmail: accountEmail || 'all' })
   if (accountEmail) {
     clearAccountCache(accountEmail)
     delete folderListCache[accountEmail]

@@ -7,6 +7,7 @@ import { BrowserWindow } from 'electron'
 import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as crypto from 'crypto'
 import { logger, LogCategory } from './logger'
 import icon from '../../resources/icon.png?asset'
 import {
@@ -39,7 +40,8 @@ const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo'
 const GOOGLE_SCOPES = [
   'https://mail.google.com/',
   'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile'
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/drive.file' // Google Drive 대용량 첨부용
 ]
 
 // Microsoft OAuth 설정
@@ -58,6 +60,14 @@ const MICROSOFT_SCOPES = [
 // 로컬 콜백 서버 포트
 const OAUTH_CALLBACK_PORT = 8235
 const OAUTH_REDIRECT_URI = `http://localhost:${OAUTH_CALLBACK_PORT}/oauth/callback`
+
+// OAuth 타임아웃 (2분 - 보안상 짧게 유지)
+const OAUTH_TIMEOUT_MS = 2 * 60 * 1000
+
+// CSRF 방지를 위한 state 생성
+function generateOAuthState(): string {
+  return crypto.randomBytes(32).toString('hex')
+}
 
 // OAuth 결과 페이지 HTML 템플릿
 function getOAuthResultHTML(success: boolean, email?: string, errorMsg?: string): string {
@@ -389,6 +399,9 @@ export async function startGoogleOAuth(
     // OAuth 설정 저장
     saveOAuthConfig('google', { clientId, clientSecret })
 
+    // CSRF 방지를 위한 state 생성
+    const expectedState = generateOAuthState()
+
     // 인증 URL 생성
     const authUrl = new URL(GOOGLE_AUTH_URL)
     authUrl.searchParams.set('client_id', clientId)
@@ -397,6 +410,7 @@ export async function startGoogleOAuth(
     authUrl.searchParams.set('scope', GOOGLE_SCOPES.join(' '))
     authUrl.searchParams.set('access_type', 'offline')
     authUrl.searchParams.set('prompt', 'consent')
+    authUrl.searchParams.set('state', expectedState)
 
     // 로컬 콜백 서버 생성
     const server = http.createServer(async (req, res) => {
@@ -405,6 +419,17 @@ export async function startGoogleOAuth(
       if (url.pathname === '/oauth/callback') {
         const code = url.searchParams.get('code')
         const error = url.searchParams.get('error')
+        const receivedState = url.searchParams.get('state')
+
+        // CSRF 방지: state 검증
+        if (receivedState !== expectedState) {
+          logger.warn(LogCategory.AUTH, 'OAuth state mismatch - possible CSRF attack')
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+          res.end(getOAuthResultHTML(false, undefined, '보안 검증 실패: 잘못된 요청입니다.'))
+          server.close()
+          resolve({ success: false, error: 'State mismatch - possible CSRF attack' })
+          return
+        }
 
         if (error) {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -509,14 +534,11 @@ export async function startGoogleOAuth(
       })
     })
 
-    // 타임아웃 (5분)
-    setTimeout(
-      () => {
-        server.close()
-        resolve({ success: false, error: 'OAuth timeout' })
-      },
-      5 * 60 * 1000
-    )
+    // 타임아웃 (2분 - 보안상 짧게 유지)
+    setTimeout(() => {
+      server.close()
+      resolve({ success: false, error: 'OAuth timeout' })
+    }, OAUTH_TIMEOUT_MS)
   })
 }
 
@@ -542,6 +564,9 @@ export async function startMicrosoftOAuth(
     // OAuth 설정 저장
     saveOAuthConfig('microsoft', { clientId, clientSecret })
 
+    // CSRF 방지를 위한 state 생성
+    const expectedState = generateOAuthState()
+
     // 인증 URL 생성
     const authUrl = new URL(MICROSOFT_AUTH_URL)
     authUrl.searchParams.set('client_id', clientId)
@@ -549,6 +574,7 @@ export async function startMicrosoftOAuth(
     authUrl.searchParams.set('response_type', 'code')
     authUrl.searchParams.set('scope', MICROSOFT_SCOPES.join(' '))
     authUrl.searchParams.set('response_mode', 'query')
+    authUrl.searchParams.set('state', expectedState)
 
     // 로컬 콜백 서버 생성
     const server = http.createServer(async (req, res) => {
@@ -557,6 +583,17 @@ export async function startMicrosoftOAuth(
       if (url.pathname === '/oauth/callback') {
         const code = url.searchParams.get('code')
         const error = url.searchParams.get('error')
+        const receivedState = url.searchParams.get('state')
+
+        // CSRF 방지: state 검증
+        if (receivedState !== expectedState) {
+          logger.warn(LogCategory.AUTH, 'OAuth state mismatch - possible CSRF attack')
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+          res.end(getOAuthResultHTML(false, undefined, '보안 검증 실패: 잘못된 요청입니다.'))
+          server.close()
+          resolve({ success: false, error: 'State mismatch - possible CSRF attack' })
+          return
+        }
 
         if (error) {
           const errorDesc = url.searchParams.get('error_description') || error
@@ -663,14 +700,11 @@ export async function startMicrosoftOAuth(
       })
     })
 
-    // 타임아웃 (5분)
-    setTimeout(
-      () => {
-        server.close()
-        resolve({ success: false, error: 'OAuth timeout' })
-      },
-      5 * 60 * 1000
-    )
+    // 타임아웃 (2분 - 보안상 짧게 유지)
+    setTimeout(() => {
+      server.close()
+      resolve({ success: false, error: 'OAuth timeout' })
+    }, OAUTH_TIMEOUT_MS)
   })
 }
 

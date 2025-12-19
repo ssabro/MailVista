@@ -649,20 +649,59 @@ export function ComposeEmail({
 
       setAttachments((prev) => [...prev, ...cloudAttachments])
 
-      // 이메일 본문에 다운로드 링크 추가
+      // 이메일 본문에 다운로드 링크 추가 (보기 좋은 UI)
       const linksHtml = successfulUploads
         .map(
-          (r) =>
-            `<p><a href="${r.shareUrl}" target="_blank">${r.fileName}</a> (${formatFileSize(r.fileSize)})</p>`
+          (r) => `
+            <tr>
+              <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb;">
+                <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                  <tr>
+                    <td width="40" valign="top">
+                      <div style="width: 36px; height: 36px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); border-radius: 8px; text-align: center; line-height: 36px;">
+                        <span style="color: white; font-size: 16px;">📎</span>
+                      </div>
+                    </td>
+                    <td style="padding-left: 12px;">
+                      <a href="${r.shareUrl}" target="_blank" style="color: #2563eb; text-decoration: none; font-weight: 500; font-size: 14px; display: block; margin-bottom: 2px;">
+                        ${r.fileName}
+                      </a>
+                      <span style="color: #6b7280; font-size: 12px;">${formatFileSize(r.fileSize)} · ${r.provider === 'google-drive' ? 'Google Drive' : 'Cloud Storage'}</span>
+                    </td>
+                    <td width="80" align="right" valign="middle">
+                      <a href="${r.shareUrl}" target="_blank" style="display: inline-block; padding: 6px 12px; background: #2563eb; color: white; text-decoration: none; border-radius: 6px; font-size: 12px; font-weight: 500;">
+                        ${t('largeFile.download')}
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          `
         )
         .join('')
 
       const cloudLinksBlock = `
         <br><br>
-        <div style="padding: 12px; background: #f5f5f5; border-radius: 8px; border: 1px solid #e0e0e0;">
-          <p style="margin: 0 0 8px 0; font-weight: bold; color: #333;">${t('largeFile.downloadLinks')}</p>
+        <table cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width: 500px; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <tr>
+            <td style="padding: 14px 16px; background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-bottom: 1px solid #e5e7eb;">
+              <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td>
+                    <span style="font-size: 16px; margin-right: 8px;">📦</span>
+                    <span style="font-weight: 600; color: #1f2937; font-size: 14px;">${t('largeFile.downloadLinks')}</span>
+                  </td>
+                  <td align="right">
+                    <span style="color: #6b7280; font-size: 12px;">${t('largeFile.fileCount', { count: successfulUploads.length })}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
           ${linksHtml}
-        </div>
+        </table>
+        <p style="margin: 8px 0 0 0; color: #9ca3af; font-size: 11px;">${t('largeFile.linkExpiryNote')}</p>
       `
 
       setEditorContent((prev) => prev + cloudLinksBlock)
@@ -805,14 +844,17 @@ export function ComposeEmail({
         }
       }
 
+      // 클라우드 업로드 파일은 첨부에서 제외 (본문에 링크로 포함됨)
+      const localAttachments = attachments.filter((a) => !a.isCloudUpload && a.path)
+
       const baseEmailData = {
         subject: isImportant ? `${t('compose.importantPrefix')} ${subject}` : subject,
         text: textContent,
         html: htmlContent,
         headers: Object.keys(encryptionHeaders).length > 0 ? encryptionHeaders : undefined,
         attachments:
-          attachments.length > 0
-            ? attachments.map((a) => ({
+          localAttachments.length > 0
+            ? localAttachments.map((a) => ({
                 filename: a.name,
                 path: a.path
               }))
@@ -1811,7 +1853,7 @@ export function ComposeEmail({
             )}
 
             {/* 메일 본문 */}
-            <div className="border rounded-lg p-4 min-h-[200px] bg-white">
+            <div className="border rounded-lg p-4 min-h-[200px] bg-card">
               <div
                 className="text-sm prose prose-sm max-w-none"
                 dangerouslySetInnerHTML={{

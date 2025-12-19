@@ -21,11 +21,11 @@ import { getEmailRepository } from './storage/email-repository'
 import type { EmailRecord, EmailInput } from './storage/email-repository'
 import { getSearchService } from './storage/search-service'
 import type { SearchOptions } from './storage/search-service'
+import { getBodyStorage } from './storage/body-storage'
 import { v4 as uuidv4 } from 'uuid'
 
 // 인코딩 유틸리티 모듈 import
 import {
-  encodeImapUtf7,
   convertImapListToFolders,
   type MailFolder as EncodingMailFolder,
 } from './utils/encoding'
@@ -1668,6 +1668,12 @@ export async function getFolderInfo(
   email: string,
   folderPath: string
 ): Promise<{ success: boolean; total?: number; unseen?: number; error?: string }> {
+  // 컨테이너 폴더 체크 (선택 불가능한 폴더)
+  const containerFolders = ['[Gmail]', '[Google Mail]']
+  if (containerFolders.some((cf) => folderPath.toLowerCase() === cf.toLowerCase())) {
+    return { success: true, total: 0, unseen: 0 }
+  }
+
   const account = await getAccountWithPasswordAsync(email)
   if (!account) {
     return { success: false, error: 'Account not found' }
@@ -1740,6 +1746,13 @@ export async function getEmails(
   folderPath: string,
   options: { start?: number; limit?: number; unreadOnly?: boolean } = {}
 ): Promise<{ success: boolean; emails?: EmailHeader[]; total?: number; error?: string }> {
+  // 컨테이너 폴더 체크 (선택 불가능한 폴더)
+  const containerFolders = ['[Gmail]', '[Google Mail]']
+  if (containerFolders.some((cf) => folderPath.toLowerCase() === cf.toLowerCase())) {
+    console.log(`[getEmails] Skipping container folder: ${folderPath}`)
+    return { success: true, emails: [], total: 0 }
+  }
+
   const account = await getAccountWithPasswordAsync(email)
   if (!account) {
     return { success: false, error: 'Account not found' }
@@ -1986,6 +1999,45 @@ export async function getEmailContent(
         chunks.push(Buffer.from(chunk))
       }
       const rawEmail = Buffer.concat(chunks)
+
+      // 로컬 캐시에 저장 (실패해도 메일 조회는 계속)
+      try {
+        const folderRepository = getFolderRepository()
+        const emailRepository = getEmailRepository()
+        const bodyStorage = getBodyStorage()
+
+        const folder = folderRepository.getByEmailAndPath(email, folderPath)
+        if (folder) {
+          const emailRecord = emailRepository.getByUid(folder.id, uid)
+          if (emailRecord && !emailRecord.body_path) {
+            // 본문이 아직 캐시되지 않은 경우에만 저장
+            const bodyPath = await bodyStorage.saveBodyBuffer(
+              folder.account_id,
+              folder.id,
+              uid,
+              rawEmail
+            )
+            emailRepository.updateBody(emailRecord.id, {
+              bodyPath,
+              bodyText: '', // 전문 검색용 텍스트는 필요시 별도 추출
+              cachedAt: Date.now()
+            })
+            logger.info(LogCategory.CACHE, 'Email body saved locally (user read)', {
+              accountEmail: email,
+              uid,
+              bodyPath,
+              size: rawEmail.length
+            })
+          }
+        }
+      } catch (cacheErr) {
+        // 캐싱 실패 시 로그만 남기고 계속 진행
+        logger.warn(LogCategory.CACHE, 'Failed to cache email body locally', {
+          uid,
+          email,
+          error: cacheErr instanceof Error ? cacheErr.message : 'Unknown error'
+        })
+      }
 
       // simpleParser로 전체 이메일 파싱
       const parsedEmail = await simpleParser(rawEmail)
@@ -2400,8 +2452,8 @@ export async function setEmailFlags(
   let client: ImapFlow | null = null
   try {
     client = await createImapConnection(account)
-    const encodedFolderPath = encodeImapUtf7(folderPath)
-    const lock = await client.getMailboxLock(encodedFolderPath)
+    // ImapFlow handles UTF-7 encoding automatically - pass UTF-8 folder path directly
+    const lock = await client.getMailboxLock(folderPath)
 
     try {
       if (add) {
@@ -2492,8 +2544,8 @@ export async function deleteEmail(
   let client: ImapFlow | null = null
   try {
     client = await createImapConnection(account)
-    const encodedFolderPath = encodeImapUtf7(folderPath)
-    const lock = await client.getMailboxLock(encodedFolderPath)
+    // ImapFlow handles UTF-7 encoding automatically - pass UTF-8 folder path directly
+    const lock = await client.getMailboxLock(folderPath)
 
     try {
       if (permanent) {
@@ -2543,20 +2595,19 @@ export async function moveEmail(
     return { success: false, error: 'Account not found' }
   }
 
-  const encodedFromFolder = encodeImapUtf7(fromFolder)
-  const encodedToFolder = encodeImapUtf7(toFolder)
+  // ImapFlow handles UTF-7 encoding automatically - pass UTF-8 folder paths directly
   console.log(`[moveEmail] Starting: uid=${uid}, from=${fromFolder}, to=${toFolder}`)
 
   let client: ImapFlow | null = null
   try {
     client = await createImapConnection(account)
-    const lock = await client.getMailboxLock(encodedFromFolder)
+    const lock = await client.getMailboxLock(fromFolder)
 
     try {
       console.log(`[moveEmail] Mailbox opened, uidvalidity=${client.mailbox ? client.mailbox.uidValidity : 'unknown'}`)
 
       // messageMove는 MOVE 확장 지원 시 사용, 아니면 COPY + DELETE
-      await client.messageMove({ uid: uid }, encodedToFolder, { uid: true })
+      await client.messageMove({ uid: uid }, toFolder, { uid: true })
 
       console.log(`[moveEmail] Move completed successfully`)
 
@@ -2592,6 +2643,25 @@ export async function deleteBulkEmails(
     return { success: true, deletedCount: 0, failedUids: [] }
   }
 
+  // Gmail의 "All Mail" 폴더는 직접 삭제 불가 (가상 폴더이므로 실제 폴더에서 삭제해야 함)
+  const gmailAllMailPatterns = [
+    /^\[Gmail\]\/All Mail$/i,
+    /^\[Gmail\]\/전체보관함$/,
+    /^\[Gmail\]\/모든 메일$/,
+    /^\[Google Mail\]\/All Mail$/i,
+    /^\[Google Mail\]\/전체보관함$/,
+    /^\[Google Mail\]\/모든 메일$/
+  ]
+  if (gmailAllMailPatterns.some((pattern) => pattern.test(folderPath))) {
+    console.log(`[deleteBulkEmails] Skipping Gmail All Mail folder: ${folderPath}`)
+    return {
+      success: false,
+      deletedCount: 0,
+      failedUids: uids,
+      error: 'Cannot delete directly from Gmail All Mail folder. Delete from the original folder instead.'
+    }
+  }
+
   // 단일 이메일은 기존 함수 사용
   if (uids.length === 1) {
     const result = await deleteEmail(email, folderPath, uids[0], permanent)
@@ -2613,8 +2683,8 @@ export async function deleteBulkEmails(
   let client: ImapFlow | null = null
   try {
     client = await createImapConnection(account)
-    const encodedFolderPath = encodeImapUtf7(folderPath)
-    const lock = await client.getMailboxLock(encodedFolderPath)
+    // ImapFlow handles UTF-7 encoding automatically - pass UTF-8 folder path directly
+    const lock = await client.getMailboxLock(folderPath)
 
     try {
       if (permanent) {
@@ -2682,21 +2752,20 @@ export async function moveBulkEmails(
     return { success: false, movedCount: 0, failedUids: uids, error: 'Account not found' }
   }
 
-  const encodedFromFolder = encodeImapUtf7(fromFolder)
-  const encodedToFolder = encodeImapUtf7(toFolder)
+  // ImapFlow handles UTF-7 encoding automatically - pass UTF-8 folder paths directly
   console.log(`[moveBulkEmails] Starting: ${uids.length} emails from ${fromFolder} to ${toFolder}`)
 
   let client: ImapFlow | null = null
   try {
     client = await createImapConnection(account)
-    const lock = await client.getMailboxLock(encodedFromFolder)
+    const lock = await client.getMailboxLock(fromFolder)
 
     try {
       console.log(`[moveBulkEmails] Mailbox opened, uidvalidity=${client.mailbox ? client.mailbox.uidValidity : 'unknown'}`)
 
       // messageMove는 배치 처리 지원
       const uidSet = uids.join(',')
-      await client.messageMove(uidSet, encodedToFolder, { uid: true })
+      await client.messageMove(uidSet, toFolder, { uid: true })
 
       console.log(`[moveBulkEmails] Move completed successfully: ${uids.length} emails`)
 
@@ -2729,8 +2798,8 @@ async function fetchEmailHeadersByUids(
   let client: ImapFlow | null = null
   try {
     client = await createImapConnection(account)
-    const encodedFolderPath = encodeImapUtf7(folderPath)
-    const lock = await client.getMailboxLock(encodedFolderPath)
+    // ImapFlow handles UTF-7 encoding automatically - pass UTF-8 folder path directly
+    const lock = await client.getMailboxLock(folderPath)
 
     const emails: EmailHeader[] = []
 
@@ -2816,8 +2885,8 @@ export async function searchEmails(
   let client: ImapFlow | null = null
   try {
     client = await createImapConnection(account)
-    const encodedFolderPath = encodeImapUtf7(folderPath)
-    const lock = await client.getMailboxLock(encodedFolderPath)
+    // ImapFlow handles UTF-7 encoding automatically - pass UTF-8 folder path directly
+    const lock = await client.getMailboxLock(folderPath)
 
     try {
       // 폴더가 비어있는지 확인
@@ -4032,6 +4101,8 @@ export async function emptyFolder(
 
   let client: ImapFlow | null = null
 
+  let imapDeletedCount = 0
+
   try {
     client = await createImapConnection(account)
     const lock = await client.getMailboxLock(folderPath)
@@ -4039,35 +4110,78 @@ export async function emptyFolder(
     try {
       // 메일함이 비어있는지 확인
       const total = client.mailbox ? client.mailbox.exists : 0
-      if (total === 0) {
-        return { success: true, deletedCount: 0 }
+
+      if (total > 0) {
+        // 모든 메일 검색
+        const searchResult = await client.search({ all: true }, { uid: true })
+        const uids = searchResult || []
+
+        // IMAP에서 메일이 있으면 삭제
+        if (uids.length > 0) {
+          await client.messageDelete(uids, { uid: true })
+          imapDeletedCount = uids.length
+        }
       }
-
-      // 모든 메일 검색
-      const searchResult = await client.search({ all: true }, { uid: true })
-      const uids = searchResult || []
-
-      if (uids.length === 0) {
-        return { success: true, deletedCount: 0 }
-      }
-
-      // 모든 메일 삭제 (messageDelete는 \Deleted 플래그 추가 후 EXPUNGE 수행)
-      await client.messageDelete(uids, { uid: true })
 
       // 캐시 무효화
       invalidateFolderCache(email, folderPath)
-
-      return { success: true, deletedCount: uids.length }
     } finally {
       lock.release()
     }
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+    logger.error(LogCategory.MAIL_DELETE, 'IMAP empty folder failed', {
+      folderPath,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    // IMAP 오류가 발생해도 SQLite는 정리 시도
   } finally {
     if (client) {
       await client.logout().catch(() => {})
     }
   }
+
+  // SQLite에서도 이메일 삭제 (IMAP 결과와 관계없이 항상 실행)
+  let sqliteDeletedCount = 0
+  try {
+    const folderRepo = getFolderRepository()
+    const emailRepo = getEmailRepository()
+    const folder = folderRepo.getByEmailAndPath(email, folderPath)
+
+    logger.info(LogCategory.MAIL_DELETE, 'Empty folder - SQLite lookup', {
+      email,
+      folderPath,
+      folderFound: !!folder,
+      folderId: folder?.id,
+      imapDeletedCount
+    })
+
+    if (folder) {
+      // 해당 폴더의 모든 이메일을 삭제된 것으로 표시 (UID 상관없이 전체)
+      sqliteDeletedCount = emailRepo.markAllAsDeletedInFolder(folder.id)
+      // 폴더 카운트 재계산
+      folderRepo.recalculateCounts(folder.id)
+      logger.info(LogCategory.MAIL_DELETE, 'Emptied folder in SQLite', {
+        folderPath,
+        sqliteDeletedCount
+      })
+    } else {
+      // 폴더를 찾지 못한 경우 - 가능한 폴더 목록 로그
+      const accountId = folderRepo.getAccountIdByEmail(email)
+      if (accountId) {
+        const allFolders = folderRepo.getByAccountId(accountId)
+        logger.warn(LogCategory.MAIL_DELETE, 'Folder not found in SQLite for empty operation', {
+          requestedPath: folderPath,
+          availablePaths: allFolders.map(f => f.path)
+        })
+      }
+    }
+  } catch (dbErr) {
+    logger.error(LogCategory.DATABASE, 'Failed to empty folder in SQLite', {
+      error: dbErr instanceof Error ? dbErr.message : String(dbErr)
+    })
+  }
+
+  return { success: true, deletedCount: Math.max(imapDeletedCount, sqliteDeletedCount) }
 }
 
 // =====================================================

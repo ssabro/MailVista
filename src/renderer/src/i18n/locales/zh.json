@@ -39,7 +39,10 @@
   "notification": {
     "newMailTitle": "新邮件 {{count}}封",
     "newMailBodySingle": "发件人: {{from}}\n主题: {{subject}}",
-    "newMailBodyMulti": "发件人: {{from}} 等 {{count}}人"
+    "newMailBodyMulti": "发件人: {{from}} 等 {{count}}人",
+    "newMailTitleWithAccount": "[{{account}}] 新邮件 {{count}}封",
+    "newMailBodySingleWithAccount": "账户: {{account}}\n发件人: {{from}}\n主题: {{subject}}",
+    "newMailBodyMultiWithAccount": "账户: {{account}}\n发件人: {{from}} 等 {{count}}人"
   },
   "header": {
     "mail": "邮件",
@@ -56,6 +59,7 @@
     "starred": "星标",
     "attachment": "附件",
     "inbox": "收件箱",
+    "allMail": "全部邮件",
     "sent": "已发送",
     "drafts": "草稿箱",
     "scheduled": "定时发送",
@@ -91,6 +95,22 @@
     "e2e": "E2E加密",
     "language": "语言",
     "languageDesc": "选择应用程序使用的语言。",
+    "appearance": {
+      "title": "外观",
+      "desc": "配置应用程序的主题和颜色。",
+      "themeMode": "主题模式",
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统",
+      "colorPalette": "配色方案",
+      "palettes": {
+        "haze": "Haze",
+        "forest": "Forest",
+        "sunset": "Sunset",
+        "lavender": "Lavender",
+        "rose": "Rose"
+      }
+    },
     "loadingSettings": "正在加载设置...",
     "resetConfirm": "确定要将设置恢复为默认值吗？",
     "saveComplete": "保存完成",
@@ -296,6 +316,7 @@
     "saveAsEml": "保存为EML",
     "noEmails": "没有邮件",
     "loadingEmails": "正在加载邮件...",
+    "loadingContent": "正在加载邮件内容...",
     "switchingAccount": "请稍候。\n正在切换账户...",
     "selectEmail": "请选择一封邮件",
     "sending": "发送中...",
@@ -1244,7 +1265,16 @@
       "description": "与应用日志相关的设置。",
       "level": "日志级别",
       "retention": "日志保留期限",
-      "days": "{{count}}天"
+      "days": "{{count}}天",
+      "openFolder": "打开日志文件夹",
+      "export": "导出日志",
+      "clear": "清除日志",
+      "levels": {
+        "debug": "详细（开发者）",
+        "info": "普通",
+        "warn": "仅警告",
+        "error": "仅错误"
+      }
     },
     "updates": {
       "title": "更新设置",
@@ -1257,7 +1287,9 @@
     "cache": {
       "title": "缓存管理",
       "description": "删除应用缓存以释放存储空间。",
-      "clear": "清除缓存"
+      "clear": "清除缓存",
+      "empty": "没有可清除的缓存。",
+      "cleared": "已删除{{files}}个文件（{{size}}）"
     }
   },
   "largeFile": {
@@ -1275,7 +1307,12 @@
     "uploadFailed": "上传失败: {{files}}",
     "expiresIn14Days": "链接将在14天后过期。",
     "downloadLinks": "大附件下载",
+    "download": "下载",
+    "fileCount": "{{count}}个文件",
+    "linkExpiryNote": "※ 链接可能在一定时间后过期。",
     "transferShNote": "Transfer.sh无需登录即可使用。文件保存14天。",
+    "selectService": "选择上传服务",
+    "googleDriveNote": "文件将上传到您的Gmail账户的Google Drive。",
     "googleDriveSetup": "连接Google Drive",
     "googleDriveSetupDesc": "请在Google Cloud Console中创建OAuth凭据并输入。",
     "clientId": "客户端ID",
@@ -1323,8 +1360,14 @@
     "downloadAnyway": "仍然下载",
     "suspiciousLink": "可疑链接",
     "suspiciousLinkWarning": "此链接可能是伪装的：",
+    "suspiciousLinkDesc": "此链接可能存在危险。是否继续？",
+    "externalLinkConfirm": "打开外部链接",
+    "externalLinkDesc": "点击此链接将在外部浏览器中打开。",
+    "linkDestination": "链接目标",
+    "internationalizedDomain": "国际化域名 (IDN)",
     "actualDomain": "实际域名",
     "openAnyway": "仍然打开",
+    "openLink": "打开链接",
     "emailAuthStatus": "邮件认证状态",
     "authVerified": "已验证",
     "authFailed": "验证失败",

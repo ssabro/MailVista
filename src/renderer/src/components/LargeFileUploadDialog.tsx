@@ -9,7 +9,6 @@ import {
   DialogFooter
 } from './ui/dialog'
 import { Button } from './ui/button'
-import { Input } from './ui/input'
 import { Label } from './ui/label'
 import {
   Cloud,
@@ -19,8 +18,7 @@ import {
   AlertCircle,
   Link,
   HardDrive,
-  ExternalLink,
-  Settings
+  ExternalLink
 } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 
@@ -52,6 +50,7 @@ interface LargeFileUploadDialogProps {
 }
 
 type UploadStatus = 'idle' | 'uploading' | 'success' | 'error'
+type ProviderType = 'google-drive' | 'transfer-sh'
 
 interface FileUploadState {
   fileId: string
@@ -68,63 +67,42 @@ export function LargeFileUploadDialog({
   onUploadComplete
 }: LargeFileUploadDialogProps) {
   const { t } = useTranslation()
-  const [provider, setProvider] = React.useState<string>('auto')
-  const [isConnected, setIsConnected] = React.useState(false)
-  const [connectedEmail, setConnectedEmail] = React.useState<string>('')
+  const [selectedProvider, setSelectedProvider] = React.useState<ProviderType>('transfer-sh')
+  const [canUseGoogleDrive, setCanUseGoogleDrive] = React.useState(false)
   const [uploadStates, setUploadStates] = React.useState<Map<string, FileUploadState>>(new Map())
   const [isUploading, setIsUploading] = React.useState(false)
-  const [showGoogleSetup, setShowGoogleSetup] = React.useState(false)
-  const [googleClientId, setGoogleClientId] = React.useState('')
-  const [googleClientSecret, setGoogleClientSecret] = React.useState('')
-  const [isConnecting, setIsConnecting] = React.useState(false)
 
-  // 계정에 맞는 클라우드 서비스 감지
+  // Gmail OAuth로 Google Drive 사용 가능 여부 확인
   React.useEffect(() => {
     if (isOpen && accountEmail) {
-      detectProvider()
+      checkGoogleDriveAvailability()
     }
   }, [isOpen, accountEmail])
 
-  const detectProvider = async () => {
+  const checkGoogleDriveAvailability = async () => {
     try {
-      const detected = await window.electron.ipcRenderer.invoke(
-        'detect-cloud-provider',
+      const canUse = await window.electron.ipcRenderer.invoke(
+        'can-use-google-drive',
         accountEmail
       )
-      setProvider(detected)
-
-      // 연결 상태 확인
-      if (detected !== 'transfer-sh') {
-        const connected = await window.electron.ipcRenderer.invoke(
-          'is-cloud-provider-connected',
-          detected
-        )
-        setIsConnected(connected)
-
-        if (connected) {
-          const creds = await window.electron.ipcRenderer.invoke('get-cloud-credentials', detected)
-          if (creds.email) {
-            setConnectedEmail(creds.email)
-          }
-        }
+      setCanUseGoogleDrive(canUse)
+      // Gmail OAuth 계정이면 기본으로 Google Drive 선택
+      if (canUse) {
+        setSelectedProvider('google-drive')
       } else {
-        setIsConnected(true) // Transfer.sh는 항상 사용 가능
+        setSelectedProvider('transfer-sh')
       }
     } catch (error) {
-      console.error('Failed to detect provider:', error)
-      setProvider('transfer-sh')
-      setIsConnected(true)
+      console.error('Failed to check Google Drive availability:', error)
+      setCanUseGoogleDrive(false)
+      setSelectedProvider('transfer-sh')
     }
   }
 
-  const getProviderName = (p: string): string => {
+  const getProviderName = (p: ProviderType): string => {
     switch (p) {
       case 'google-drive':
         return 'Google Drive'
-      case 'onedrive':
-        return 'OneDrive'
-      case 'naver-cloud':
-        return t('largeFile.naverCloud')
       case 'transfer-sh':
         return 'Transfer.sh'
       default:
@@ -132,12 +110,10 @@ export function LargeFileUploadDialog({
     }
   }
 
-  const getProviderIcon = (p: string) => {
+  const getProviderIcon = (p: ProviderType) => {
     switch (p) {
       case 'google-drive':
         return <HardDrive className="h-5 w-5 text-blue-500" />
-      case 'onedrive':
-        return <Cloud className="h-5 w-5 text-blue-600" />
       case 'transfer-sh':
         return <Upload className="h-5 w-5 text-green-500" />
       default:
@@ -150,32 +126,6 @@ export function LargeFileUploadDialog({
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
-  }
-
-  const handleConnectGoogleDrive = async () => {
-    if (!googleClientId || !googleClientSecret) return
-
-    setIsConnecting(true)
-    try {
-      const result = await window.electron.ipcRenderer.invoke(
-        'connect-google-drive',
-        googleClientId,
-        googleClientSecret
-      )
-
-      if (result.success) {
-        setIsConnected(true)
-        setShowGoogleSetup(false)
-        await detectProvider() // 연결 후 다시 상태 확인
-      } else {
-        alert(result.error || t('largeFile.connectionFailed'))
-      }
-    } catch (error) {
-      console.error('Failed to connect:', error)
-      alert(t('largeFile.connectionFailed'))
-    } finally {
-      setIsConnecting(false)
-    }
   }
 
   const handleUpload = async () => {
@@ -227,7 +177,7 @@ export function LargeFileUploadDialog({
         const errorResult: UploadResult = {
           fileId: file.id,
           success: false,
-          provider: provider,
+          provider: selectedProvider,
           fileName: file.name,
           fileSize: file.size,
           error: error instanceof Error ? error.message : 'Upload failed'
@@ -253,7 +203,6 @@ export function LargeFileUploadDialog({
   }
 
   // 업로드가 시작되었고 모든 파일이 완료되었는지 확인
-  // uploadStates.size > 0 조건 추가: 빈 배열의 every()는 true를 반환하기 때문
   const allUploaded =
     uploadStates.size > 0 &&
     Array.from(uploadStates.values()).every((s) => s.status === 'success' || s.status === 'error')
@@ -274,41 +223,57 @@ export function LargeFileUploadDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* 클라우드 서비스 정보 */}
-          <div className="p-3 bg-muted rounded-lg">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {getProviderIcon(provider)}
-                <div>
-                  <p className="font-medium">{getProviderName(provider)}</p>
-                  {provider !== 'transfer-sh' && isConnected && connectedEmail && (
-                    <p className="text-xs text-muted-foreground">{connectedEmail}</p>
-                  )}
-                </div>
-              </div>
-
-              {provider === 'google-drive' && !isConnected && (
+          {/* 클라우드 서비스 선택 */}
+          {!isUploading && !allUploaded && (
+            <div className="space-y-2">
+              <Label>{t('largeFile.selectService') || '업로드 서비스 선택'}</Label>
+              <div className="flex gap-2">
+                {/* Google Drive 옵션 (Gmail OAuth 계정만) */}
+                {canUseGoogleDrive && (
+                  <Button
+                    variant={selectedProvider === 'google-drive' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setSelectedProvider('google-drive')}
+                    className="flex-1"
+                  >
+                    <HardDrive className="h-4 w-4 mr-2" />
+                    Google Drive
+                  </Button>
+                )}
+                {/* Transfer.sh 옵션 (항상 사용 가능) */}
                 <Button
-                  variant="outline"
+                  variant={selectedProvider === 'transfer-sh' ? 'default' : 'outline'}
                   size="sm"
-                  onClick={() => setShowGoogleSetup(true)}
-                  className="text-xs"
+                  onClick={() => setSelectedProvider('transfer-sh')}
+                  className="flex-1"
                 >
-                  <Settings className="h-3 w-3 mr-1" />
-                  {t('largeFile.connect')}
+                  <Upload className="h-4 w-4 mr-2" />
+                  Transfer.sh
                 </Button>
-              )}
+              </div>
+            </div>
+          )}
 
-              {isConnected && (
-                <span className="text-xs text-green-600 flex items-center gap-1">
-                  <CheckCircle className="h-3 w-3" />
-                  {t('largeFile.connected')}
-                </span>
-              )}
+          {/* 선택된 서비스 정보 */}
+          <div className="p-3 bg-muted rounded-lg">
+            <div className="flex items-center gap-2">
+              {getProviderIcon(selectedProvider)}
+              <div>
+                <p className="font-medium">{getProviderName(selectedProvider)}</p>
+                {selectedProvider === 'google-drive' && (
+                  <p className="text-xs text-muted-foreground">{accountEmail}</p>
+                )}
+              </div>
+              <CheckCircle className="h-4 w-4 text-green-500 ml-auto" />
             </div>
 
-            {provider === 'transfer-sh' && (
+            {selectedProvider === 'transfer-sh' && (
               <p className="text-xs text-muted-foreground mt-2">{t('largeFile.transferShNote')}</p>
+            )}
+            {selectedProvider === 'google-drive' && (
+              <p className="text-xs text-muted-foreground mt-2">
+                {t('largeFile.googleDriveNote') || 'Gmail 계정의 Google Drive에 업로드됩니다.'}
+              </p>
             )}
           </div>
 
@@ -372,9 +337,28 @@ export function LargeFileUploadDialog({
                     <ExternalLink className="h-3 w-3 text-muted-foreground" />
                   </div>
                 ))}
-              {provider === 'transfer-sh' && (
+              {selectedProvider === 'transfer-sh' && (
                 <p className="text-xs text-muted-foreground">{t('largeFile.expiresIn14Days')}</p>
               )}
+            </div>
+          )}
+
+          {/* 에러 표시 */}
+          {allUploaded && successCount === 0 && (
+            <div className="p-3 bg-red-50 rounded-lg">
+              <p className="text-sm font-medium text-red-800 flex items-center gap-1">
+                <AlertCircle className="h-4 w-4" />
+                {t('largeFile.uploadFailed', {
+                  files: files.map((f) => f.name).join(', ')
+                })}
+              </p>
+              {Array.from(uploadStates.values())
+                .filter((s) => s.status === 'error' && s.result?.error)
+                .map((s) => (
+                  <p key={s.fileId} className="text-xs text-red-600 mt-1">
+                    {s.result?.fileName}: {s.result?.error}
+                  </p>
+                ))}
             </div>
           )}
         </div>
@@ -385,7 +369,7 @@ export function LargeFileUploadDialog({
               <Button variant="outline" onClick={onClose} disabled={isUploading}>
                 {t('common.cancel')}
               </Button>
-              <Button onClick={handleUpload} disabled={isUploading || !isConnected}>
+              <Button onClick={handleUpload} disabled={isUploading}>
                 {isUploading ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -404,67 +388,6 @@ export function LargeFileUploadDialog({
           )}
         </DialogFooter>
       </DialogContent>
-
-      {/* Google Drive 설정 다이얼로그 */}
-      <Dialog open={showGoogleSetup} onOpenChange={setShowGoogleSetup}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('largeFile.googleDriveSetup')}</DialogTitle>
-            <DialogDescription>{t('largeFile.googleDriveSetupDesc')}</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="clientId">{t('largeFile.clientId')}</Label>
-              <Input
-                id="clientId"
-                value={googleClientId}
-                onChange={(e) => setGoogleClientId(e.target.value)}
-                placeholder="xxxxxxxxx.apps.googleusercontent.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="clientSecret">{t('largeFile.clientSecret')}</Label>
-              <Input
-                id="clientSecret"
-                type="password"
-                value={googleClientSecret}
-                onChange={(e) => setGoogleClientSecret(e.target.value)}
-                placeholder="GOCSPX-xxxxxxxxx"
-              />
-            </div>
-
-            <div className="p-3 bg-muted rounded-lg text-xs space-y-1">
-              <p className="font-medium">{t('largeFile.howToGetCredentials')}</p>
-              <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                <li>{t('largeFile.step1')}</li>
-                <li>{t('largeFile.step2')}</li>
-                <li>{t('largeFile.step3')}</li>
-                <li>{t('largeFile.step4')}</li>
-              </ol>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowGoogleSetup(false)}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              onClick={handleConnectGoogleDrive}
-              disabled={!googleClientId || !googleClientSecret || isConnecting}
-            >
-              {isConnecting ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  {t('largeFile.connecting')}
-                </>
-              ) : (
-                t('largeFile.connect')
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </Dialog>
   )
 }
