@@ -30,6 +30,14 @@ interface LargeFile {
   type: string
 }
 
+type UploadErrorCode =
+  | 'FILE_TOO_LARGE'
+  | 'FILE_NOT_FOUND'
+  | 'PERMISSION_DENIED'
+  | 'NETWORK_ERROR'
+  | 'AUTH_REQUIRED'
+  | 'UNKNOWN_ERROR'
+
 interface UploadResult {
   fileId: string
   success: boolean
@@ -38,6 +46,8 @@ interface UploadResult {
   fileSize: number
   shareUrl?: string
   error?: string
+  errorCode?: UploadErrorCode
+  maxFileSize?: number
   expiresAt?: string
 }
 
@@ -71,6 +81,15 @@ export function LargeFileUploadDialog({
   const [canUseGoogleDrive, setCanUseGoogleDrive] = React.useState(false)
   const [uploadStates, setUploadStates] = React.useState<Map<string, FileUploadState>>(new Map())
   const [isUploading, setIsUploading] = React.useState(false)
+
+  // 다이얼로그가 열릴 때 상태 초기화
+  React.useEffect(() => {
+    if (isOpen) {
+      // 새로운 파일로 다이얼로그가 열리면 업로드 상태 초기화
+      setUploadStates(new Map())
+      setIsUploading(false)
+    }
+  }, [isOpen, files])
 
   // Gmail OAuth로 Google Drive 사용 가능 여부 확인
   React.useEffect(() => {
@@ -128,6 +147,40 @@ export function LargeFileUploadDialog({
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
   }
 
+  const getErrorMessage = (result: UploadResult): string => {
+    const providerName = result.provider === 'google-drive' ? 'Google Drive' : 'Transfer.sh'
+
+    switch (result.errorCode) {
+      case 'FILE_TOO_LARGE':
+        const maxSize = result.maxFileSize ? formatFileSize(result.maxFileSize) : '512 MB'
+        return t('largeFile.error.fileTooLarge', {
+          defaultValue: `파일이 너무 큽니다. ${providerName}은(는) 최대 ${maxSize}까지 업로드할 수 있습니다.`,
+          provider: providerName,
+          maxSize
+        })
+      case 'PERMISSION_DENIED':
+        return t('largeFile.error.permissionDenied', {
+          defaultValue: `${providerName} 접근 권한이 없습니다. 계정을 다시 연결해주세요.`,
+          provider: providerName
+        })
+      case 'AUTH_REQUIRED':
+        return t('largeFile.error.authRequired', {
+          defaultValue: `${providerName} 인증이 필요합니다. 계정을 다시 연결해주세요.`,
+          provider: providerName
+        })
+      case 'FILE_NOT_FOUND':
+        return t('largeFile.error.fileNotFound', {
+          defaultValue: '파일을 찾을 수 없습니다.'
+        })
+      case 'NETWORK_ERROR':
+        return t('largeFile.error.networkError', {
+          defaultValue: '네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.'
+        })
+      default:
+        return result.error || t('largeFile.error.unknown', { defaultValue: '업로드 중 오류가 발생했습니다.' })
+    }
+  }
+
   const handleUpload = async () => {
     setIsUploading(true)
 
@@ -153,7 +206,8 @@ export function LargeFileUploadDialog({
           'upload-large-file',
           file.path,
           accountEmail,
-          file.name
+          file.name,
+          selectedProvider
         )
 
         const uploadResult: UploadResult = {
@@ -211,18 +265,70 @@ export function LargeFileUploadDialog({
     (s) => s.status === 'success'
   ).length
 
+  const errorCount = Array.from(uploadStates.values()).filter(
+    (s) => s.status === 'error'
+  ).length
+
+  // 에러가 있을 때는 외부 클릭으로 닫히지 않도록
+  const handleOpenChange = (open: boolean) => {
+    if (!open && errorCount > 0) {
+      // 에러가 있으면 명시적 닫기 버튼만 허용
+      return
+    }
+    if (!open) {
+      onClose()
+    }
+  }
+
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Cloud className="h-5 w-5" />
-            {t('largeFile.title')}
+            {errorCount > 0 && allUploaded ? (
+              <AlertCircle className="h-5 w-5 text-red-500" />
+            ) : (
+              <Cloud className="h-5 w-5" />
+            )}
+            {errorCount > 0 && allUploaded
+              ? t('largeFile.uploadError', { defaultValue: '업로드 오류' })
+              : t('largeFile.title')}
           </DialogTitle>
-          <DialogDescription>{t('largeFile.description')}</DialogDescription>
+          <DialogDescription>
+            {errorCount > 0 && allUploaded
+              ? t('largeFile.errorDescription', { defaultValue: '아래 오류 내용을 확인해주세요.' })
+              : t('largeFile.description')}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* 에러 표시 (상단에 눈에 띄게) */}
+          {allUploaded && errorCount > 0 && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-lg space-y-3">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-red-800">
+                    {successCount === 0
+                      ? t('largeFile.allUploadsFailed', { defaultValue: '업로드에 실패했습니다' })
+                      : t('largeFile.someUploadsFailed', {
+                          defaultValue: `${errorCount}개 파일 업로드에 실패했습니다`,
+                          count: errorCount
+                        })}
+                  </p>
+                  {Array.from(uploadStates.values())
+                    .filter((s) => s.status === 'error' && s.result)
+                    .map((s) => (
+                      <div key={s.fileId} className="mt-2 p-2 bg-red-100 rounded text-sm">
+                        <p className="font-medium text-red-900">{s.result?.fileName}</p>
+                        <p className="text-red-700 mt-1">{getErrorMessage(s.result!)}</p>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 클라우드 서비스 선택 */}
           {!isUploading && !allUploaded && (
             <div className="space-y-2">
@@ -343,24 +449,6 @@ export function LargeFileUploadDialog({
             </div>
           )}
 
-          {/* 에러 표시 */}
-          {allUploaded && successCount === 0 && (
-            <div className="p-3 bg-red-50 rounded-lg">
-              <p className="text-sm font-medium text-red-800 flex items-center gap-1">
-                <AlertCircle className="h-4 w-4" />
-                {t('largeFile.uploadFailed', {
-                  files: files.map((f) => f.name).join(', ')
-                })}
-              </p>
-              {Array.from(uploadStates.values())
-                .filter((s) => s.status === 'error' && s.result?.error)
-                .map((s) => (
-                  <p key={s.fileId} className="text-xs text-red-600 mt-1">
-                    {s.result?.fileName}: {s.result?.error}
-                  </p>
-                ))}
-            </div>
-          )}
         </div>
 
         <DialogFooter>

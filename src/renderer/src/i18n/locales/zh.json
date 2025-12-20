@@ -1321,7 +1321,19 @@
     "step1": "在Google Cloud Console中创建新项目",
     "step2": "启用Google Drive API",
     "step3": "配置OAuth同意屏幕（添加测试用户）",
-    "step4": "凭据 > 创建OAuth 2.0客户端ID（桌面应用）"
+    "step4": "凭据 > 创建OAuth 2.0客户端ID（桌面应用）",
+    "uploadError": "上传错误",
+    "errorDescription": "请查看以下错误详情。",
+    "allUploadsFailed": "上传失败",
+    "someUploadsFailed": "{{count}}个文件上传失败",
+    "error": {
+      "fileTooLarge": "文件太大。{{provider}}最大支持{{maxSize}}。",
+      "permissionDenied": "没有{{provider}}的访问权限。请重新连接账户。",
+      "authRequired": "需要{{provider}}认证。请重新连接账户。",
+      "fileNotFound": "找不到文件。",
+      "networkError": "网络错误。请检查您的网络连接。",
+      "unknown": "上传过程中发生错误。"
+    }
   },
   "sync": {
     "syncing": "同步中",

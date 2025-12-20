@@ -25,6 +25,14 @@ export type { CloudProvider, CloudCredentials, CloudStorageSettings }
 // 타입 정의
 // =====================================================
 
+export type UploadErrorCode =
+  | 'FILE_TOO_LARGE'
+  | 'FILE_NOT_FOUND'
+  | 'PERMISSION_DENIED'
+  | 'NETWORK_ERROR'
+  | 'AUTH_REQUIRED'
+  | 'UNKNOWN_ERROR'
+
 export interface UploadResult {
   success: boolean
   provider: CloudProvider
@@ -32,6 +40,8 @@ export interface UploadResult {
   fileSize: number
   shareUrl?: string
   error?: string
+  errorCode?: UploadErrorCode
+  maxFileSize?: number // 파일 크기 제한 오류 시 최대 허용 크기
   expiresAt?: string // For temporary services like Transfer.sh
 }
 
@@ -324,7 +334,8 @@ export async function uploadToTransferSh(
         provider: 'transfer-sh',
         fileName: actualFileName,
         fileSize: 0,
-        error
+        error,
+        errorCode: 'FILE_NOT_FOUND'
       }
     }
 
@@ -335,7 +346,6 @@ export async function uploadToTransferSh(
     // 파일 크기 제한 확인 (512MB)
     const maxSize = 512 * 1024 * 1024
     if (fileSize > maxSize) {
-      const error = `File too large: ${formatFileSize(fileSize)} (max: ${formatFileSize(maxSize)})`
       logger.error(LogCategory.EXPORT, 'Upload failed - file too large', {
         fileSize,
         maxSize,
@@ -346,7 +356,9 @@ export async function uploadToTransferSh(
         provider: 'transfer-sh',
         fileName: actualFileName,
         fileSize,
-        error
+        error: `File too large: ${formatFileSize(fileSize)} (max: ${formatFileSize(maxSize)})`,
+        errorCode: 'FILE_TOO_LARGE',
+        maxFileSize: maxSize
       }
     }
 
@@ -500,7 +512,8 @@ export async function uploadToGoogleDrive(
       provider: 'google-drive',
       fileName: actualFileName,
       fileSize: 0,
-      error: 'Account email is required for Google Drive upload'
+      error: 'Account email is required for Google Drive upload',
+      errorCode: 'AUTH_REQUIRED'
     }
   }
 
@@ -510,7 +523,8 @@ export async function uploadToGoogleDrive(
       provider: 'google-drive',
       fileName: actualFileName,
       fileSize: 0,
-      error: 'This account does not support Google Drive (not a Gmail OAuth account)'
+      error: 'This account does not support Google Drive (not a Gmail OAuth account)',
+      errorCode: 'AUTH_REQUIRED'
     }
   }
 
@@ -522,7 +536,8 @@ export async function uploadToGoogleDrive(
       provider: 'google-drive',
       fileName: actualFileName,
       fileSize: 0,
-      error: 'Failed to get Google access token'
+      error: 'Failed to get Google access token',
+      errorCode: 'AUTH_REQUIRED'
     }
   }
 
@@ -560,6 +575,23 @@ export async function uploadToGoogleDrive(
         statusText: metadataResponse.statusText,
         body: errorBody
       })
+
+      // 403 권한 오류 처리 (scope 부족 등)
+      if (metadataResponse.status === 403) {
+        const isInsufficientScope = errorBody.includes('insufficientPermissions') ||
+          errorBody.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')
+        return {
+          success: false,
+          provider: 'google-drive',
+          fileName: actualFileName,
+          fileSize,
+          error: isInsufficientScope
+            ? 'Google Drive 접근 권한이 없습니다. 계정을 다시 연결해주세요.'
+            : `권한 오류: ${metadataResponse.status}`,
+          errorCode: 'PERMISSION_DENIED'
+        }
+      }
+
       throw new Error(`Failed to initiate upload: ${metadataResponse.status} - ${errorBody}`)
     }
 
@@ -710,16 +742,20 @@ function getMimeType(fileName: string): string {
 export async function uploadLargeFile(
   filePath: string,
   accountEmail: string,
-  fileName?: string
+  fileName?: string,
+  selectedProvider?: string
 ): Promise<UploadResult> {
-  const settings = getCloudStorageSettings()
+  // 사용자가 직접 선택한 provider가 있으면 우선 사용
+  let provider: CloudProvider = (selectedProvider as CloudProvider) || 'none'
 
-  // 선호하는 서비스가 있으면 해당 서비스 사용
-  let provider: CloudProvider = settings.preferredProvider || 'none'
+  // provider가 지정되지 않은 경우에만 자동 감지
+  if (provider === 'none') {
+    const settings = getCloudStorageSettings()
+    provider = settings.preferredProvider || 'none'
 
-  // 자동 선택 모드이면 계정에 맞는 서비스 감지
-  if (settings.autoSelectByAccount || provider === 'none') {
-    provider = detectCloudProvider(accountEmail)
+    if (settings.autoSelectByAccount || provider === 'none') {
+      provider = detectCloudProvider(accountEmail)
+    }
   }
 
   logger.info(LogCategory.EXPORT, 'Starting large file upload', {

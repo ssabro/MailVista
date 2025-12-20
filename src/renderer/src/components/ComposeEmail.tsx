@@ -707,14 +707,15 @@ export function ComposeEmail({
       setEditorContent((prev) => prev + cloudLinksBlock)
     }
 
-    // 실패한 파일이 있으면 알림
+    // 실패한 파일이 있으면 다이얼로그를 열어두어 사용자가 에러를 확인할 수 있게 함
     const failedUploads = results.filter((r) => !r.success)
     if (failedUploads.length > 0) {
-      const failedNames = failedUploads.map((r) => r.fileName).join(', ')
-      setError(t('largeFile.uploadFailed', { files: failedNames }))
+      // 에러가 있으면 다이얼로그를 닫지 않음 - 사용자가 직접 닫아야 함
+      // 다이얼로그에서 에러 메시지를 보여줌
+      return
     }
 
-    // 상태 초기화
+    // 모두 성공한 경우에만 상태 초기화 및 다이얼로그 닫기
     setPendingLargeFiles([])
     setShowLargeFileDialog(false)
   }

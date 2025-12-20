@@ -2372,8 +2372,8 @@ app.whenReady().then(() => {
   // 대용량 파일 업로드
   ipcMain.handle(
     'upload-large-file',
-    async (_event, filePath: string, accountEmail: string, fileName?: string) => {
-      return uploadLargeFile(filePath, accountEmail, fileName)
+    async (_event, filePath: string, accountEmail: string, fileName?: string, provider?: string) => {
+      return uploadLargeFile(filePath, accountEmail, fileName, provider)
     }
   )
 

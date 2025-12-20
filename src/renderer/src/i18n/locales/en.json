@@ -1339,7 +1339,19 @@
     "step1": "Create a new project in Google Cloud Console",
     "step2": "Enable Google Drive API",
     "step3": "Configure OAuth consent screen (add test users)",
-    "step4": "Credentials > Create OAuth 2.0 Client ID (Desktop app)"
+    "step4": "Credentials > Create OAuth 2.0 Client ID (Desktop app)",
+    "uploadError": "Upload Error",
+    "errorDescription": "Please check the error details below.",
+    "allUploadsFailed": "Upload failed",
+    "someUploadsFailed": "{{count}} file(s) failed to upload",
+    "error": {
+      "fileTooLarge": "File is too large. {{provider}} allows up to {{maxSize}}.",
+      "permissionDenied": "No permission to access {{provider}}. Please reconnect your account.",
+      "authRequired": "Authentication required for {{provider}}. Please reconnect your account.",
+      "fileNotFound": "File not found.",
+      "networkError": "Network error. Please check your internet connection.",
+      "unknown": "An error occurred during upload."
+    }
   },
   "sync": {
     "syncing": "Syncing",

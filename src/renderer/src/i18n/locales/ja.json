@@ -1321,7 +1321,19 @@
     "step1": "Google Cloud Consoleで新しいプロジェクトを作成",
     "step2": "Google Drive APIを有効化",
     "step3": "OAuth同意画面を設定（テストユーザーを追加）",
-    "step4": "認証情報 > OAuth 2.0クライアントIDを作成（デスクトップアプリ）"
+    "step4": "認証情報 > OAuth 2.0クライアントIDを作成（デスクトップアプリ）",
+    "uploadError": "アップロードエラー",
+    "errorDescription": "以下のエラー内容をご確認ください。",
+    "allUploadsFailed": "アップロードに失敗しました",
+    "someUploadsFailed": "{{count}}件のファイルのアップロードに失敗しました",
+    "error": {
+      "fileTooLarge": "ファイルが大きすぎます。{{provider}}は最大{{maxSize}}までアップロードできます。",
+      "permissionDenied": "{{provider}}へのアクセス権限がありません。アカウントを再接続してください。",
+      "authRequired": "{{provider}}の認証が必要です。アカウントを再接続してください。",
+      "fileNotFound": "ファイルが見つかりません。",
+      "networkError": "ネットワークエラーが発生しました。インターネット接続を確認してください。",
+      "unknown": "アップロード中にエラーが発生しました。"
+    }
   },
   "sync": {
     "syncing": "同期中",
