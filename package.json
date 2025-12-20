@@ -1,6 +1,6 @@
 {
   "name": "mailvista",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A modern desktop email client with multi-account support, encryption, and AI integration",
   "main": "./out/main/index.js",
   "author": "ssabro",
