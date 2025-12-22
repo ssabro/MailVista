@@ -3,6 +3,8 @@
 A modern, secure desktop email client built with Electron, React, and TypeScript.
 
 Electron, React, TypeScript로 만든 현대적이고 안전한 데스크톱 이메일 클라이언트입니다.
+<img width="1440" height="1256" alt="image" src="https://github.com/user-attachments/assets/a03244f1-18f8-498f-b982-fb43ca1d4f6b" />
+
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
