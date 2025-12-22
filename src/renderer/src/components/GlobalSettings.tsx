@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 import { Label } from './ui/label'
 import { Switch } from './ui/switch'
+import { Input } from './ui/input'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from './ui/select'
 import { Button } from './ui/button'
 import {
@@ -23,7 +24,8 @@ import {
   FolderOpen,
   Sun,
   Moon,
-  Check
+  Check,
+  RotateCcw
 } from 'lucide-react'
 import { changeLanguage } from '../i18n'
 import { useTheme, ColorPalette, ThemeMode, paletteInfo } from '../contexts/ThemeContext'
@@ -141,6 +143,11 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
   const [pinConfirm, setPinConfirm] = useState(['', '', '', '', '', ''])
   const [pinStep, setPinStep] = useState<'enter' | 'confirm'>('enter')
   const [pinError, setPinError] = useState<string | null>(null)
+
+  // 앱 초기화 상태
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [isResetting, setIsResetting] = useState(false)
+  const [resetConfirmText, setResetConfirmText] = useState('')
 
   // 업데이트 상태 변경 이벤트 리스너
   const handleUpdateStatusChange = useCallback((_event: unknown, status: UpdateStatus) => {
@@ -365,6 +372,29 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
       console.error('Failed to clear logs:', error)
     } finally {
       setIsClearingLogs(false)
+    }
+  }
+
+  const handleAppReset = async () => {
+    if (resetConfirmText !== 'RESET') {
+      return
+    }
+
+    setIsResetting(true)
+    try {
+      const result = await window.electron.ipcRenderer.invoke('app-reset')
+      if (result.success) {
+        // 초기화 성공 - 앱 전체 재시작 (main process 포함)
+        setShowResetConfirm(false)
+        setResetConfirmText('')
+        await window.electron.ipcRenderer.invoke('app-restart')
+      } else {
+        console.error('App reset failed:', result.error)
+      }
+    } catch (error) {
+      console.error('Failed to reset app:', error)
+    } finally {
+      setIsResetting(false)
     }
   }
 
@@ -1044,6 +1074,37 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
                   </p>
                 </CardContent>
               </Card>
+
+              <Card className="border-destructive/50">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2 text-destructive">
+                    <RotateCcw className="h-4 w-4" />
+                    {t('globalSettings.reset.title')}
+                  </CardTitle>
+                  <CardDescription>{t('globalSettings.reset.description')}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+                    <p className="text-sm text-muted-foreground">
+                      {t('globalSettings.reset.warning')}
+                    </p>
+                    <ul className="mt-2 text-sm text-muted-foreground list-disc list-inside space-y-1">
+                      <li>{t('globalSettings.reset.items.accounts')}</li>
+                      <li>{t('globalSettings.reset.items.emails')}</li>
+                      <li>{t('globalSettings.reset.items.settings')}</li>
+                      <li>{t('globalSettings.reset.items.cache')}</li>
+                    </ul>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    onClick={() => setShowResetConfirm(true)}
+                    className="w-full"
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    {t('globalSettings.reset.button')}
+                  </Button>
+                </CardContent>
+              </Card>
             </TabsContent>
           </div>
         </Tabs>
@@ -1132,6 +1193,81 @@ export function GlobalSettings({ isOpen, onClose }: GlobalSettingsProps) {
             </Button>
             <Button onClick={handlePinSetup}>
               {pinStep === 'enter' ? t('common.next') : t('common.confirm')}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 앱 초기화 확인 다이얼로그 */}
+      <Dialog
+        open={showResetConfirm}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowResetConfirm(false)
+            setResetConfirmText('')
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <AlertCircle className="h-5 w-5" />
+              {t('globalSettings.reset.confirmTitle')}
+            </DialogTitle>
+            <DialogDescription>{t('globalSettings.reset.confirmDescription')}</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <p className="text-sm font-medium text-destructive">
+                {t('globalSettings.reset.confirmWarning')}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="reset-confirm">
+                {t('globalSettings.reset.confirmLabel')}
+              </Label>
+              <Input
+                id="reset-confirm"
+                value={resetConfirmText}
+                onChange={(e) => setResetConfirmText(e.target.value)}
+                placeholder="RESET"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t('globalSettings.reset.confirmHint')}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowResetConfirm(false)
+                setResetConfirmText('')
+              }}
+              disabled={isResetting}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleAppReset}
+              disabled={resetConfirmText !== 'RESET' || isResetting}
+            >
+              {isResetting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {t('globalSettings.reset.resetting')}
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  {t('globalSettings.reset.confirmButton')}
+                </>
+              )}
             </Button>
           </div>
         </DialogContent>

@@ -877,6 +877,42 @@ export function removeAccountCredentials(accountEmail: string): void {
 }
 
 // =====================================================
+// 앱 초기화 (모든 데이터 삭제)
+// =====================================================
+
+export function clearAllData(): { success: boolean; error?: string } {
+  try {
+    // config 스토어 초기화 - defaults로 재설정
+    const config = getConfigStore()
+    config.set('global', defaultGlobalSettings)
+    config.set('accounts', {})
+
+    // credentials 스토어 초기화 - defaults로 재설정
+    const credentials = getCredentialsStore()
+    credentials.set('oauth', {
+      tokens: {},
+      configs: {}
+    })
+    credentials.set('cloudStorage', {
+      settings: {
+        autoSelectByAccount: true,
+        fileSizeThreshold: 10
+      },
+      credentials: {}
+    })
+
+    console.log('[Settings] All data cleared successfully')
+    return { success: true }
+  } catch (err) {
+    console.error('[Settings] Failed to clear all data:', err)
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to clear all data'
+    }
+  }
+}
+
+// =====================================================
 // 기존 설정 마이그레이션
 // =====================================================
 

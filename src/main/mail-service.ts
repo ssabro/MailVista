@@ -51,7 +51,8 @@ export {
   setPin,
   verifyPin,
   disablePin,
-  isPinEnabled
+  isPinEnabled,
+  clearAllData
 } from './settings'
 export type { AppSettings, GlobalAppSettings } from './settings'
 
@@ -174,6 +175,7 @@ interface StoredAccount {
 }
 
 const store = new ElectronStore<{ accounts: StoredAccount[] }>({
+  name: 'accounts', // accounts.json 사용 (account-store.ts와 동일)
   defaults: {
     accounts: []
   }
@@ -889,8 +891,9 @@ function upsertHeadersToCache(
   if (sqliteStorageEnabled && headers.length > 0) {
     try {
       // 계정 조회 (StoredAccount에서 이름 가져오기)
-      const storedAccounts = store.get('accounts') || []
-      const storedAccount = storedAccounts.find(a => a.email === email)
+      const storedAccounts = store.get('accounts', [])
+      const accountsArray = Array.isArray(storedAccounts) ? storedAccounts : []
+      const storedAccount = accountsArray.find(a => a.email === email)
       const accountName = storedAccount?.name || email
 
       // 계정 및 폴더 확보
@@ -1106,7 +1109,9 @@ export function saveAccount(config: AccountConfig): { success: boolean; error?: 
       outgoing: config.outgoing
     }
 
-    const accounts = store.get('accounts', [])
+    const storedAccounts = store.get('accounts', [])
+    // 방어 코드: 배열이 아닌 경우 빈 배열로 처리
+    const accounts = Array.isArray(storedAccounts) ? storedAccounts : []
     // 이미 존재하는 계정이면 업데이트
     const existingIndex = accounts.findIndex((a) => a.email === config.email)
     if (existingIndex >= 0) {
@@ -1123,11 +1128,15 @@ export function saveAccount(config: AccountConfig): { success: boolean; error?: 
 }
 
 export function getAccounts(): StoredAccount[] {
-  return store.get('accounts', [])
+  const accounts = store.get('accounts', [])
+  // 방어 코드: 배열이 아닌 경우 빈 배열 반환
+  return Array.isArray(accounts) ? accounts : []
 }
 
 export function getAccountWithPassword(email: string): AccountConfig | null {
   const accounts = store.get('accounts', [])
+  // 방어 코드: 배열이 아닌 경우 null 반환
+  if (!Array.isArray(accounts)) return null
   const account = accounts.find((a) => a.email === email)
 
   if (!account) return null
@@ -1182,7 +1191,9 @@ export async function getAccountWithPasswordAsync(email: string): Promise<Accoun
 }
 
 export function deleteAccount(email: string): { success: boolean } {
-  const accounts = store.get('accounts', [])
+  const storedAccounts = store.get('accounts', [])
+  // 방어 코드: 배열이 아닌 경우 빈 배열로 처리
+  const accounts = Array.isArray(storedAccounts) ? storedAccounts : []
   const filtered = accounts.filter((a) => a.email !== email)
   store.set('accounts', filtered)
   return { success: true }
@@ -1190,7 +1201,9 @@ export function deleteAccount(email: string): { success: boolean } {
 
 export function setDefaultAccount(email: string): { success: boolean; error?: string } {
   try {
-    const accounts = store.get('accounts', [])
+    const storedAccounts = store.get('accounts', [])
+    // 방어 코드: 배열이 아닌 경우 빈 배열로 처리
+    const accounts = Array.isArray(storedAccounts) ? storedAccounts : []
     const updated = accounts.map((a) => ({
       ...a,
       isDefault: a.email === email
@@ -1204,7 +1217,8 @@ export function setDefaultAccount(email: string): { success: boolean; error?: st
 
 export function hasAccounts(): boolean {
   const accounts = store.get('accounts', [])
-  return accounts.length > 0
+  // 방어 코드: 배열이 아닌 경우 false 반환
+  return Array.isArray(accounts) && accounts.length > 0
 }
 
 // 이메일 관련 인터페이스
@@ -3209,12 +3223,44 @@ export async function searchEmailsDetailed(
         allEmails.push(...folderEmails)
       }
 
+      // Gmail 특수 폴더 패턴 (삭제 작업이 제대로 동작하지 않는 폴더)
+      const gmailSpecialFolderPatterns = [
+        /^\[Gmail\]\//i,
+        /^\[Google Mail\]\//i
+      ]
+      const isGmailSpecialFolder = (folder: string): boolean => {
+        return gmailSpecialFolderPatterns.some(pattern => pattern.test(folder))
+      }
+
+      // messageId 기반 중복 제거 (Gmail 라벨 등으로 인해 여러 폴더에 동일 이메일 존재 가능)
+      // 일반 폴더(INBOX 등)를 Gmail 특수 폴더([Gmail]/All Mail 등)보다 우선
+      const emailsByMessageId = new Map<string, typeof allEmails[0]>()
+      for (const email of allEmails) {
+        const key = email.messageId || `${email.folder}:${email.uid}`
+        const existing = emailsByMessageId.get(key)
+
+        if (!existing) {
+          // 첫 번째 발견
+          emailsByMessageId.set(key, email)
+        } else {
+          // 이미 존재하는 경우: 일반 폴더를 우선
+          const existingIsSpecial = isGmailSpecialFolder(existing.folder || '')
+          const currentIsSpecial = isGmailSpecialFolder(email.folder || '')
+
+          // 기존이 특수 폴더이고 현재가 일반 폴더면 교체
+          if (existingIsSpecial && !currentIsSpecial) {
+            emailsByMessageId.set(key, email)
+          }
+        }
+      }
+      const dedupedEmails = Array.from(emailsByMessageId.values())
+
       // 날짜순 정렬 (최신 먼저)
-      allEmails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      dedupedEmails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
 
       // 페이지네이션 적용
-      const total = allEmails.length
-      const pagedEmails = allEmails.slice(start - 1, start - 1 + limit)
+      const total = dedupedEmails.length
+      const pagedEmails = dedupedEmails.slice(start - 1, start - 1 + limit)
       return { success: true, emails: pagedEmails, total }
     }
 
@@ -3381,13 +3427,42 @@ export async function searchEmailsByFilter(
       }
     }
 
-    // 날짜 기준 정렬 (최신 먼저)
-    allEmails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    // Gmail 특수 폴더 패턴 (삭제 작업이 제대로 동작하지 않는 폴더)
+    const gmailSpecialFolderPatterns = [
+      /^\[Gmail\]\//i,
+      /^\[Google Mail\]\//i
+    ]
+    const isGmailSpecialFolder = (folder: string): boolean => {
+      return gmailSpecialFolderPatterns.some(pattern => pattern.test(folder))
+    }
 
-    const total = allEmails.length
+    // messageId 기반 중복 제거 (Gmail 라벨 등으로 인해 여러 폴더에 동일 이메일 존재 가능)
+    // 일반 폴더(INBOX 등)를 Gmail 특수 폴더([Gmail]/All Mail 등)보다 우선
+    const emailsByMessageId = new Map<string, typeof allEmails[0]>()
+    for (const email of allEmails) {
+      const key = email.messageId || `${email.folder}:${email.uid}`
+      const existing = emailsByMessageId.get(key)
+
+      if (!existing) {
+        emailsByMessageId.set(key, email)
+      } else {
+        const existingIsSpecial = isGmailSpecialFolder(existing.folder || '')
+        const currentIsSpecial = isGmailSpecialFolder(email.folder || '')
+
+        if (existingIsSpecial && !currentIsSpecial) {
+          emailsByMessageId.set(key, email)
+        }
+      }
+    }
+    const dedupedEmails = Array.from(emailsByMessageId.values())
+
+    // 날짜 기준 정렬 (최신 먼저)
+    dedupedEmails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+    const total = dedupedEmails.length
 
     // 페이지네이션 적용
-    const pagedEmails = allEmails.slice(start - 1, start - 1 + limit)
+    const pagedEmails = dedupedEmails.slice(start - 1, start - 1 + limit)
 
     // folder 필드 포함하여 반환 (필터 검색에서 폴더 정보 필요)
     const resultEmails: EmailHeader[] = pagedEmails.map(e => ({

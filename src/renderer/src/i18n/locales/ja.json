@@ -1290,6 +1290,35 @@
       "clear": "キャッシュを削除",
       "empty": "削除するキャッシュがありません。",
       "cleared": "{{files}}件のファイル（{{size}}）を削除しました"
+    },
+    "storage": {
+      "title": "メールストレージ",
+      "description": "メールメタデータとキャッシュされた本文のローカルストレージです。",
+      "diskUsage": "ディスク使用量",
+      "totalEmails": "全メール数",
+      "cachedBodies": "キャッシュされた本文",
+      "totalFolders": "全フォルダ数",
+      "clear": "ストレージを全削除",
+      "clearWarning": "キャッシュされたメールデータがすべて削除されます。メールはサーバーから再ダウンロードされます。"
+    },
+    "reset": {
+      "title": "アプリの初期化",
+      "description": "アプリを初期インストール状態に戻します。",
+      "warning": "この操作により、以下のデータがすべて削除されます：",
+      "items": {
+        "accounts": "すべてのメールアカウント情報",
+        "emails": "キャッシュされたメールデータ",
+        "settings": "すべてのアプリ設定と認証情報",
+        "cache": "キャッシュとログファイル"
+      },
+      "button": "アプリを初期化",
+      "confirmTitle": "アプリ初期化の確認",
+      "confirmDescription": "本当にアプリを初期化しますか？この操作は元に戻せません。",
+      "confirmWarning": "すべてのアカウント、設定、キャッシュデータが完全に削除されます。",
+      "confirmLabel": "確認のため RESET と入力してください",
+      "confirmHint": "大文字の RESET を正確に入力する必要があります。",
+      "confirmButton": "初期化を実行",
+      "resetting": "初期化中..."
     }
   },
   "largeFile": {

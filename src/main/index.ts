@@ -109,12 +109,14 @@ import {
   isPinEnabled,
   destroyConnectionPool,
   GlobalAppSettings,
+  clearAllData,
   // SQLite 저장소 관련
   searchEmailsLocal,
   searchEmailsDetailedLocal,
   hasLocalStorageData,
   setSqliteStorageEnabled
 } from './mail-service'
+import { clearAllAccounts } from './account'
 import {
   saveTrelloCredentials,
   getTrelloCredentials,
@@ -3495,6 +3497,55 @@ app.whenReady().then(() => {
         error: error instanceof Error ? error.message : String(error)
       }
     }
+  })
+
+  // 앱 초기화 (모든 데이터 삭제)
+  ipcMain.handle('app-reset', async () => {
+    try {
+      logger.info(LogCategory.APP, 'Starting app reset...')
+
+      // 1. 연결 풀 정리
+      destroyConnectionPool()
+
+      // 2. SQLite 데이터베이스 초기화
+      const db = getStorageDatabase()
+      db.clearAllData()
+      logger.info(LogCategory.APP, 'Storage database cleared')
+
+      // 3. 계정 정보 삭제
+      const accountResult = clearAllAccounts()
+      if (!accountResult.success) {
+        throw new Error(accountResult.error || 'Failed to clear accounts')
+      }
+      logger.info(LogCategory.APP, 'Accounts cleared')
+
+      // 4. 설정 및 자격 증명 삭제
+      const settingsResult = clearAllData()
+      if (!settingsResult.success) {
+        throw new Error(settingsResult.error || 'Failed to clear settings')
+      }
+      logger.info(LogCategory.APP, 'Settings and credentials cleared')
+
+      // 5. 캐시 삭제
+      await clearAllCache()
+      logger.info(LogCategory.APP, 'Cache cleared')
+
+      logger.info(LogCategory.APP, 'App reset completed successfully')
+      return { success: true }
+    } catch (error) {
+      logger.error(LogCategory.APP, 'App reset failed:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  // 앱 재시작
+  ipcMain.handle('app-restart', async () => {
+    logger.info(LogCategory.APP, 'App restart requested')
+    app.relaunch()
+    app.quit()
   })
 
   mainWindow = createWindow()

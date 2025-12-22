@@ -1308,6 +1308,25 @@
       "totalFolders": "Total Folders",
       "clear": "Clear All Storage",
       "clearWarning": "This will delete all cached email data. Emails will be re-downloaded from the server."
+    },
+    "reset": {
+      "title": "Reset App",
+      "description": "Reset the app to its initial state.",
+      "warning": "This action will delete all of the following data:",
+      "items": {
+        "accounts": "All email account information",
+        "emails": "Cached email data",
+        "settings": "All app settings and credentials",
+        "cache": "Cache and log files"
+      },
+      "button": "Reset App",
+      "confirmTitle": "Confirm App Reset",
+      "confirmDescription": "Are you sure you want to reset the app? This action cannot be undone.",
+      "confirmWarning": "All accounts, settings, and cached data will be permanently deleted.",
+      "confirmLabel": "Type RESET to confirm",
+      "confirmHint": "You must type RESET exactly as shown to proceed.",
+      "confirmButton": "Reset App",
+      "resetting": "Resetting..."
     }
   },
   "largeFile": {

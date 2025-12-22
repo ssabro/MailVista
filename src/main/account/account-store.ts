@@ -74,7 +74,9 @@ export function saveAccount(config: AccountConfig): SaveAccountResult {
  * 모든 계정 조회 (암호화된 상태)
  */
 export function getAccounts(): StoredAccount[] {
-  return store.get('accounts', [])
+  const accounts = store.get('accounts', [])
+  // 방어 코드: 배열이 아닌 경우 빈 배열 반환
+  return Array.isArray(accounts) ? accounts : []
 }
 
 /**
@@ -82,6 +84,8 @@ export function getAccounts(): StoredAccount[] {
  */
 export function getAccountWithPassword(email: string): AccountConfig | null {
   const accounts = store.get('accounts', [])
+  // 방어 코드: 배열이 아닌 경우 null 반환
+  if (!Array.isArray(accounts)) return null
   const account = accounts.find((a) => a.email === email)
 
   if (!account) return null
@@ -140,7 +144,9 @@ export async function getAccountWithPasswordAsync(email: string): Promise<Accoun
  */
 export function deleteAccount(email: string): DeleteAccountResult {
   const accounts = store.get('accounts', [])
-  const filtered = accounts.filter((a) => a.email !== email)
+  // 방어 코드: 배열이 아닌 경우 빈 배열로 처리
+  const accountsArray = Array.isArray(accounts) ? accounts : []
+  const filtered = accountsArray.filter((a) => a.email !== email)
   store.set('accounts', filtered)
   return { success: true }
 }
@@ -151,7 +157,9 @@ export function deleteAccount(email: string): DeleteAccountResult {
 export function setDefaultAccount(email: string): SetDefaultResult {
   try {
     const accounts = store.get('accounts', [])
-    const updated = accounts.map((a) => ({
+    // 방어 코드: 배열이 아닌 경우 빈 배열로 처리
+    const accountsArray = Array.isArray(accounts) ? accounts : []
+    const updated = accountsArray.map((a) => ({
       ...a,
       isDefault: a.email === email
     }))
@@ -170,7 +178,8 @@ export function setDefaultAccount(email: string): SetDefaultResult {
  */
 export function hasAccounts(): boolean {
   const accounts = store.get('accounts', [])
-  return accounts.length > 0
+  // 방어 코드: 배열이 아닌 경우 false 반환
+  return Array.isArray(accounts) && accounts.length > 0
 }
 
 /**
@@ -178,5 +187,23 @@ export function hasAccounts(): boolean {
  */
 export function getDefaultAccount(): StoredAccount | null {
   const accounts = store.get('accounts', [])
+  // 방어 코드: 배열이 아닌 경우 null 반환
+  if (!Array.isArray(accounts)) return null
   return accounts.find((a) => a.isDefault) || accounts[0] || null
+}
+
+/**
+ * 모든 계정 삭제 (앱 초기화용)
+ */
+export function clearAllAccounts(): { success: boolean; error?: string } {
+  try {
+    // store.clear()는 defaults를 복원하지 않으므로 빈 배열로 설정
+    store.set('accounts', [])
+    return { success: true }
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Failed to clear all accounts'
+    }
+  }
 }

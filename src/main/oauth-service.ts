@@ -464,7 +464,13 @@ export async function startGoogleOAuth(
           const tokenData = await tokenResponse.json()
 
           if (!tokenResponse.ok || !tokenData.access_token) {
-            throw new Error(tokenData.error_description || 'Token exchange failed')
+            logger.error(LogCategory.AUTH, 'Google token exchange failed', {
+              status: tokenResponse.status,
+              error: tokenData.error,
+              errorDescription: tokenData.error_description,
+              response: JSON.stringify(tokenData)
+            })
+            throw new Error(tokenData.error_description || tokenData.error || 'Token exchange failed')
           }
 
           // 사용자 정보 가져오기

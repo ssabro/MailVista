@@ -7,5 +7,6 @@ export {
   getGlobalSettings,
   updateGlobalSettings,
   resetGlobalSettings,
-  defaultGlobalSettings
+  defaultGlobalSettings,
+  clearAllData
 } from './unified-config'

@@ -1290,6 +1290,35 @@
       "clear": "清除缓存",
       "empty": "没有可清除的缓存。",
       "cleared": "已删除{{files}}个文件（{{size}}）"
+    },
+    "storage": {
+      "title": "邮件存储",
+      "description": "邮件元数据和缓存正文的本地存储。",
+      "diskUsage": "磁盘使用量",
+      "totalEmails": "总邮件数",
+      "cachedBodies": "缓存的正文",
+      "totalFolders": "总文件夹数",
+      "clear": "清除所有存储",
+      "clearWarning": "所有缓存的邮件数据将被删除。邮件将从服务器重新下载。"
+    },
+    "reset": {
+      "title": "重置应用",
+      "description": "将应用恢复到初始安装状态。",
+      "warning": "此操作将删除以下所有数据：",
+      "items": {
+        "accounts": "所有邮件账户信息",
+        "emails": "缓存的邮件数据",
+        "settings": "所有应用设置和凭据",
+        "cache": "缓存和日志文件"
+      },
+      "button": "重置应用",
+      "confirmTitle": "确认重置应用",
+      "confirmDescription": "您确定要重置应用吗？此操作无法撤消。",
+      "confirmWarning": "所有账户、设置和缓存数据将被永久删除。",
+      "confirmLabel": "请输入 RESET 以确认",
+      "confirmHint": "您必须准确输入大写的 RESET 才能继续。",
+      "confirmButton": "执行重置",
+      "resetting": "正在重置..."
     }
   },
   "largeFile": {

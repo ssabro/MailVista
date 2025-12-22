@@ -1327,6 +1327,25 @@
       "totalFolders": "전체 폴더",
       "clear": "저장소 전체 삭제",
       "clearWarning": "모든 캐시된 이메일 데이터가 삭제됩니다. 이메일은 서버에서 다시 다운로드됩니다."
+    },
+    "reset": {
+      "title": "앱 초기화",
+      "description": "앱을 처음 설치한 상태로 되돌립니다.",
+      "warning": "이 작업은 다음 데이터를 모두 삭제합니다:",
+      "items": {
+        "accounts": "모든 이메일 계정 정보",
+        "emails": "캐시된 이메일 데이터",
+        "settings": "모든 앱 설정 및 자격 증명",
+        "cache": "캐시 및 로그 파일"
+      },
+      "button": "앱 초기화",
+      "confirmTitle": "앱 초기화 확인",
+      "confirmDescription": "정말로 앱을 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+      "confirmWarning": "모든 계정, 설정, 캐시된 데이터가 영구적으로 삭제됩니다.",
+      "confirmLabel": "확인을 위해 RESET을 입력하세요",
+      "confirmHint": "대문자 RESET을 정확히 입력해야 초기화가 진행됩니다.",
+      "confirmButton": "초기화 실행",
+      "resetting": "초기화 중..."
     }
   },
   "largeFile": {

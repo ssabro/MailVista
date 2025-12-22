@@ -26,6 +26,7 @@ export interface SearchResult {
   folderPath: string
   accountId: string
   accountEmail: string
+  messageId: string | null
   subject: string | null
   fromName: string | null
   fromAddress: string | null
@@ -190,6 +191,7 @@ export class SearchService {
         f.path as folderPath,
         f.account_id as accountId,
         a.email as accountEmail,
+        e.message_id as messageId,
         e.subject,
         e.from_name as fromName,
         e.from_address as fromAddress,
@@ -212,10 +214,7 @@ export class SearchService {
 
     try {
       const results = this.db.prepare(sql).all(...params) as SearchResult[]
-      return results.map((r) => ({
-        ...r,
-        hasAttachment: Boolean(r.hasAttachment)
-      }))
+      return this.deduplicateResults(results)
     } catch (error) {
       console.error('[Search] LIKE error:', error)
       return []
@@ -248,6 +247,7 @@ export class SearchService {
         f.path as folderPath,
         f.account_id as accountId,
         a.email as accountEmail,
+        e.message_id as messageId,
         e.subject,
         e.from_name as fromName,
         e.from_address as fromAddress,
@@ -269,10 +269,7 @@ export class SearchService {
 
     try {
       const results = this.db.prepare(sql).all(...params) as SearchResult[]
-      return results.map((r) => ({
-        ...r,
-        hasAttachment: Boolean(r.hasAttachment)
-      }))
+      return this.deduplicateResults(results)
     } catch (error) {
       console.error('[Search] FTS error:', error)
       return []
@@ -334,6 +331,7 @@ export class SearchService {
         f.path as folderPath,
         f.account_id as accountId,
         a.email as accountEmail,
+        e.message_id as messageId,
         e.subject,
         e.from_name as fromName,
         e.from_address as fromAddress,
@@ -355,10 +353,7 @@ export class SearchService {
 
     try {
       const results = this.db.prepare(sql).all(...params) as SearchResult[]
-      return results.map((r) => ({
-        ...r,
-        hasAttachment: Boolean(r.hasAttachment)
-      }))
+      return this.deduplicateResults(results)
     } catch (error) {
       console.error('[Search] Hybrid error:', error)
       return []
@@ -408,6 +403,43 @@ export class SearchService {
     if (options.isFlagged) {
       conditions.push("e.flags LIKE '%\\\\Flagged%'")
     }
+  }
+
+  // Gmail 특수 폴더 패턴 (삭제 작업이 제대로 동작하지 않는 폴더)
+  private isGmailSpecialFolder(folder: string): boolean {
+    const patterns = [
+      /^\[Gmail\]\//i,
+      /^\[Google Mail\]\//i
+    ]
+    return patterns.some(pattern => pattern.test(folder))
+  }
+
+  // messageId 기반 중복 제거 (Gmail 라벨 등으로 인해 여러 폴더에 동일 이메일 존재 가능)
+  // 일반 폴더(INBOX 등)를 Gmail 특수 폴더([Gmail]/All Mail 등)보다 우선
+  private deduplicateResults(results: SearchResult[]): SearchResult[] {
+    const emailsByKey = new Map<string, SearchResult>()
+
+    for (const result of results) {
+      const key = result.messageId || result.emailId
+      const existing = emailsByKey.get(key)
+
+      if (!existing) {
+        emailsByKey.set(key, result)
+      } else {
+        // 기존이 특수 폴더이고 현재가 일반 폴더면 교체
+        const existingIsSpecial = this.isGmailSpecialFolder(existing.folderPath || '')
+        const currentIsSpecial = this.isGmailSpecialFolder(result.folderPath || '')
+
+        if (existingIsSpecial && !currentIsSpecial) {
+          emailsByKey.set(key, result)
+        }
+      }
+    }
+
+    return Array.from(emailsByKey.values()).map(r => ({
+      ...r,
+      hasAttachment: Boolean(r.hasAttachment)
+    }))
   }
 
   // 단순 FTS 쿼리 생성 (일반 텍스트용)
@@ -530,6 +562,7 @@ export class SearchService {
         f.path as folderPath,
         f.account_id as accountId,
         a.email as accountEmail,
+        e.message_id as messageId,
         e.subject,
         e.from_name as fromName,
         e.from_address as fromAddress,
@@ -565,10 +598,7 @@ export class SearchService {
 
     const results = this.db.prepare(sql).all(...params) as SearchResult[]
     console.log('[SearchService] Results count:', results.length)
-    return results.map((r) => ({
-      ...r,
-      hasAttachment: Boolean(r.hasAttachment)
-    }))
+    return this.deduplicateResults(results)
   }
 
   // 검색 제안 (자동완성) - 와일드카드 이스케이프 적용

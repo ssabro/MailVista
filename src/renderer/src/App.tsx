@@ -2243,32 +2243,74 @@ function App(): React.JSX.Element {
     const deletedEmails = emails.filter((e) => uids.includes(e.uid))
     const unreadCount = deletedEmails.filter((e) => !e.flags.includes('\\Seen')).length
 
-    const result = await window.electron.ipcRenderer.invoke(
-      'delete-bulk-emails',
-      currentAccount,
-      currentFolder,
-      uids,
-      permanent
-    )
+    // 검색/필터 모드에서는 이메일의 실제 폴더로 그룹화하여 삭제
+    const isInSearchMode = !!(detailedSearchParams || (isSearching && searchQuery.trim()))
+
+    let result: { success: boolean; deletedCount?: number; error?: string }
+
+    if (isInSearchMode) {
+      // 이메일을 폴더별로 그룹화
+      const emailsByFolder = new Map<string, number[]>()
+      for (const email of deletedEmails) {
+        const folder = email.folder || currentFolder
+        if (!emailsByFolder.has(folder)) {
+          emailsByFolder.set(folder, [])
+        }
+        emailsByFolder.get(folder)!.push(email.uid)
+      }
+
+      console.log(`[handleDeleteEmails] Search mode - emails grouped by folder:`, Object.fromEntries(emailsByFolder))
+
+      // 각 폴더별로 삭제 요청
+      let totalDeleted = 0
+      let lastError = ''
+      for (const [folder, folderUids] of emailsByFolder) {
+        const folderResult = await window.electron.ipcRenderer.invoke(
+          'delete-bulk-emails',
+          currentAccount,
+          folder,
+          folderUids,
+          permanent
+        )
+        if (folderResult.success) {
+          totalDeleted += folderResult.deletedCount || folderUids.length
+        } else {
+          lastError = folderResult.error || 'Unknown error'
+          console.error(`[handleDeleteEmails] Failed for folder ${folder}:`, folderResult.error)
+        }
+      }
+      result = { success: totalDeleted > 0, deletedCount: totalDeleted, error: lastError || undefined }
+    } else {
+      // 일반 모드 - 현재 폴더에서 삭제
+      result = await window.electron.ipcRenderer.invoke(
+        'delete-bulk-emails',
+        currentAccount,
+        currentFolder,
+        uids,
+        permanent
+      )
+    }
 
     console.log(`[handleDeleteEmails] Result:`, result)
 
     if (result.success) {
       // 폴더 카운트 업데이트
-      setFolderInfos((prev) => {
-        const current = prev[currentFolder]
-        if (current) {
-          return {
-            ...prev,
-            [currentFolder]: {
-              ...current,
-              total: Math.max(0, current.total - uids.length),
-              unseen: Math.max(0, current.unseen - unreadCount)
+      if (!isInSearchMode) {
+        setFolderInfos((prev) => {
+          const current = prev[currentFolder]
+          if (current) {
+            return {
+              ...prev,
+              [currentFolder]: {
+                ...current,
+                total: Math.max(0, current.total - uids.length),
+                unseen: Math.max(0, current.unseen - unreadCount)
+              }
             }
           }
-        }
-        return prev
-      })
+          return prev
+        })
+      }
 
       // UI에서 삭제된 메일 즉시 제거 (로컬 우선 방식)
       console.log(`[handleDeleteEmails] Removing ${uids.length} emails from UI`)
@@ -2574,10 +2616,13 @@ function App(): React.JSX.Element {
     // 삭제 전에 읽지 않은 메일인지 확인
     const isUnread = !selectedEmail.flags.includes('\\Seen')
 
+    // 검색 모드에서는 이메일의 실제 폴더 사용
+    const targetFolder = selectedEmail.folder || currentFolder
+
     await window.electron.ipcRenderer.invoke(
       'delete-email',
       currentAccount,
-      currentFolder,
+      targetFolder,
       selectedEmail.uid,
       false
     )
@@ -2592,21 +2637,24 @@ function App(): React.JSX.Element {
     )
     setTotalEmails((prev) => Math.max(0, prev - 1))
 
-    // 폴더 카운트 업데이트
-    setFolderInfos((prev) => {
-      const current = prev[currentFolder]
-      if (current) {
-        return {
-          ...prev,
-          [currentFolder]: {
-            ...current,
-            total: Math.max(0, current.total - 1),
-            unseen: isUnread ? Math.max(0, current.unseen - 1) : current.unseen
+    // 폴더 카운트 업데이트 (검색 모드가 아닐 때만)
+    const isInSearchMode = !!(detailedSearchParams || (isSearching && searchQuery.trim()))
+    if (!isInSearchMode) {
+      setFolderInfos((prev) => {
+        const current = prev[currentFolder]
+        if (current) {
+          return {
+            ...prev,
+            [currentFolder]: {
+              ...current,
+              total: Math.max(0, current.total - 1),
+              unseen: isUnread ? Math.max(0, current.unseen - 1) : current.unseen
+            }
           }
         }
-      }
-      return prev
-    })
+        return prev
+      })
+    }
 
     // 목록으로 돌아가기
     setSelectedEmail(null)
