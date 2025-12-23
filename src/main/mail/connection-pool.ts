@@ -193,34 +193,22 @@ class ImapConnectionPool {
    * 새 연결 생성
    */
   private async createConnection(account: AccountConfig): Promise<PooledConnection> {
-    // OAuth 또는 비밀번호 인증에 따라 ImapFlow 설정 구성
-    // ImapFlow는 raw accessToken을 받아 내부적으로 XOAUTH2 처리
     const imapConfig = {
       host: account.incoming.host,
       port: account.incoming.port,
       secure: account.incoming.secure,
-      auth:
-        account.useOAuth && account.accessToken
-          ? {
-              user: account.email,
-              accessToken: account.accessToken
-            }
-          : {
-              user: account.email,
-              pass: account.password
-            },
+      auth: {
+        user: account.email,
+        pass: account.password
+      },
       tls: {
         rejectUnauthorized: false
       },
       logger: false as const,
-      emitLogs: false,
-      // Gmail 등은 OAUTHBEARER를 지원하지 않으므로 XOAUTH2 강제 사용
-      disabledCapabilities: account.useOAuth && account.accessToken ? ['AUTH=OAUTHBEARER'] : []
+      emitLogs: false
     }
 
-    console.log(
-      `[Pool] Creating IMAP connection for ${account.email} (OAuth: ${!!account.useOAuth})`
-    )
+    console.log(`[Pool] Creating IMAP connection for ${account.email}`)
     const client = new ImapFlow(imapConfig)
 
     const pooledConn: PooledConnection = {
@@ -385,28 +373,19 @@ export function destroyConnectionPool(): void {
  * IMAP 연결 생성 헬퍼 (연결 풀을 사용하지 않는 경우)
  */
 export async function createImapConnection(account: AccountConfig): Promise<ImapFlow> {
-  // ImapFlow는 raw accessToken을 받아 내부적으로 XOAUTH2 처리
   const config = {
     host: account.incoming.host,
     port: account.incoming.port,
     secure: account.incoming.secure,
-    auth:
-      account.useOAuth && account.accessToken
-        ? {
-            user: account.email,
-            accessToken: account.accessToken
-          }
-        : {
-            user: account.email,
-            pass: account.password
-          },
+    auth: {
+      user: account.email,
+      pass: account.password
+    },
     tls: {
       rejectUnauthorized: false
     },
     logger: false as const,
-    emitLogs: false,
-    // Gmail 등은 OAUTHBEARER를 지원하지 않으므로 XOAUTH2 강제 사용
-    disabledCapabilities: account.useOAuth && account.accessToken ? ['AUTH=OAUTHBEARER'] : []
+    emitLogs: false
   }
 
   const client = new ImapFlow(config)

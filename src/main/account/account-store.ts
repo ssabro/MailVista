@@ -10,12 +10,6 @@ import type {
   DeleteAccountResult,
   SetDefaultResult
 } from './types'
-import {
-  isOAuthAccount,
-  getXOAuth2Token,
-  getOAuthProvider,
-  getOAuthServerConfig
-} from '../oauth-service'
 
 // electron-store는 ESM default export를 사용
 const ElectronStore = (Store as unknown as { default: typeof Store }).default || Store
@@ -109,34 +103,10 @@ export function getAccountWithPassword(email: string): AccountConfig | null {
 }
 
 /**
- * OAuth 지원 비동기 버전 - OAuth 계정인 경우 XOAUTH2 토큰을 포함
+ * 비동기 버전 - 비밀번호를 포함한 계정 정보 조회
  */
 export async function getAccountWithPasswordAsync(email: string): Promise<AccountConfig | null> {
-  const account = getAccountWithPassword(email)
-  if (!account) return null
-
-  // OAuth 계정인지 확인
-  if (isOAuthAccount(email)) {
-    const provider = getOAuthProvider(email)
-    if (provider) {
-      // OAuth 서버 설정 적용
-      const serverConfig = getOAuthServerConfig(provider)
-      account.incoming = serverConfig.imap
-      account.outgoing = serverConfig.smtp
-
-      // XOAUTH2 토큰 가져오기
-      const tokenResult = await getXOAuth2Token(email)
-      if (tokenResult.success && tokenResult.token) {
-        account.useOAuth = true
-        account.xoauth2Token = tokenResult.token // IMAP용
-        account.accessToken = tokenResult.accessToken // SMTP용
-        // OAuth의 경우 password는 사용되지 않음
-        account.password = ''
-      }
-    }
-  }
-
-  return account
+  return getAccountWithPassword(email)
 }
 
 /**

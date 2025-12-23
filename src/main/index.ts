@@ -217,20 +217,6 @@ import {
   CloudProvider
 } from './cloud-storage-service'
 import {
-  startGoogleOAuth,
-  startGoogleOAuthWithEmbeddedCredentials,
-  startMicrosoftOAuth,
-  getOAuthTokens,
-  deleteOAuthTokens,
-  isOAuthAccount,
-  getXOAuth2Token,
-  getOAuthProvider,
-  getOAuthServerConfig,
-  saveOAuthConfig,
-  getOAuthConfig,
-  hasEmbeddedOAuthCredentials
-} from './oauth-service'
-import {
   initializeStorage,
   shutdownStorage,
   getStorageDatabase,
@@ -2386,85 +2372,6 @@ app.whenReady().then(() => {
       return uploadMultipleLargeFiles(files, accountEmail)
     }
   )
-
-  // =====================================================
-  // OAuth 인증 핸들러
-  // =====================================================
-
-  // Google OAuth 시작 (클라이언트 정보 직접 제공)
-  ipcMain.handle('oauth-google-start', async (_event, clientId: string, clientSecret: string) => {
-    return startGoogleOAuth(clientId, clientSecret)
-  })
-
-  // Google OAuth 시작 (내장 자격 증명 사용)
-  ipcMain.handle('oauth-google-start-embedded', async () => {
-    return startGoogleOAuthWithEmbeddedCredentials()
-  })
-
-  // 내장 OAuth 자격 증명 존재 여부 확인
-  ipcMain.handle(
-    'oauth-has-embedded-credentials',
-    async (_event, provider: 'google' | 'microsoft') => {
-      return hasEmbeddedOAuthCredentials(provider)
-    }
-  )
-
-  // Microsoft OAuth 시작
-  ipcMain.handle(
-    'oauth-microsoft-start',
-    async (_event, clientId: string, clientSecret: string) => {
-      return startMicrosoftOAuth(clientId, clientSecret)
-    }
-  )
-
-  // OAuth 토큰 조회
-  ipcMain.handle('oauth-get-tokens', async (_event, email: string) => {
-    return getOAuthTokens(email)
-  })
-
-  // OAuth 토큰 삭제
-  ipcMain.handle('oauth-delete-tokens', async (_event, email: string) => {
-    deleteOAuthTokens(email)
-    return { success: true }
-  })
-
-  // OAuth 계정 여부 확인
-  ipcMain.handle('oauth-is-account', async (_event, email: string) => {
-    return isOAuthAccount(email)
-  })
-
-  // XOAUTH2 토큰 생성
-  ipcMain.handle('oauth-get-xoauth2-token', async (_event, email: string) => {
-    return getXOAuth2Token(email)
-  })
-
-  // OAuth 제공자 조회
-  ipcMain.handle('oauth-get-provider', async (_event, email: string) => {
-    return getOAuthProvider(email)
-  })
-
-  // OAuth 서버 설정 조회
-  ipcMain.handle('oauth-get-server-config', async (_event, provider: 'google' | 'microsoft') => {
-    return getOAuthServerConfig(provider)
-  })
-
-  // OAuth 설정 저장
-  ipcMain.handle(
-    'oauth-save-config',
-    async (
-      _event,
-      provider: 'google' | 'microsoft',
-      config: { clientId: string; clientSecret: string }
-    ) => {
-      saveOAuthConfig(provider, config)
-      return { success: true }
-    }
-  )
-
-  // OAuth 설정 조회
-  ipcMain.handle('oauth-get-config', async (_event, provider: 'google' | 'microsoft') => {
-    return getOAuthConfig(provider)
-  })
 
   // VIP 발신자 관리 (계정별 분리)
   ipcMain.handle('get-vip-senders', async (_event, accountEmail: string) => {

@@ -1,7 +1,7 @@
 /**
  * 통합 설정 관리
  * - config.json: 모든 앱 설정 (전역 + 계정별)
- * - credentials.json: OAuth 및 클라우드 스토리지 자격 증명
+ * - credentials.json: 클라우드 스토리지 자격 증명
  */
 import Store from 'electron-store'
 import { safeStorage } from 'electron'
@@ -115,22 +115,6 @@ interface ConfigStoreSchema {
   }
 }
 
-// OAuth 토큰
-export interface OAuthTokens {
-  accessToken: string
-  refreshToken: string
-  expiresAt: number
-  scope: string
-  email?: string
-}
-
-export type OAuthProvider = 'google' | 'microsoft'
-
-export interface OAuthConfig {
-  clientId: string
-  clientSecret: string
-}
-
 // 클라우드 스토리지
 export type CloudProvider = 'google-drive' | 'onedrive' | 'naver-cloud' | 'transfer-sh' | 'none'
 
@@ -157,18 +141,6 @@ export interface CloudStorageSettings {
 
 // Credentials Store 스키마
 interface CredentialsStoreSchema {
-  oauth: {
-    tokens: {
-      [email: string]: {
-        provider: OAuthProvider
-        tokens: OAuthTokens
-      }
-    }
-    configs: {
-      google?: OAuthConfig
-      microsoft?: OAuthConfig
-    }
-  }
   cloudStorage: {
     settings: CloudStorageSettings
     credentials: {
@@ -285,10 +257,6 @@ function getCredentialsStore() {
     credentialsStore = new ElectronStore<CredentialsStoreSchema>({
       name: 'credentials',
       defaults: {
-        oauth: {
-          tokens: {},
-          configs: {}
-        },
         cloudStorage: {
           settings: {
             autoSelectByAccount: true,
@@ -335,28 +303,6 @@ function decryptString(encrypted: string): string {
       '[보안 경고] 암호화되지 않은 자격 증명이 감지되었습니다. 계정을 다시 추가하여 암호화를 적용해주세요.'
     )
     return Buffer.from(encrypted, 'base64').toString()
-  }
-}
-
-// OAuth 토큰 암호화/복호화 헬퍼
-function encryptOAuthTokens(tokens: OAuthTokens): OAuthTokens {
-  return {
-    ...tokens,
-    accessToken: encryptString(tokens.accessToken),
-    refreshToken: encryptString(tokens.refreshToken)
-  }
-}
-
-function decryptOAuthTokens(tokens: OAuthTokens): OAuthTokens {
-  try {
-    return {
-      ...tokens,
-      accessToken: decryptString(tokens.accessToken),
-      refreshToken: decryptString(tokens.refreshToken)
-    }
-  } catch {
-    // 복호화 실패 시 (기존 평문 데이터) 원본 반환
-    return tokens
   }
 }
 
@@ -742,65 +688,6 @@ export function getActiveProviderKey(
 }
 
 // =====================================================
-// OAuth 함수
-// =====================================================
-
-export function saveOAuthConfig(provider: OAuthProvider, config: OAuthConfig): void {
-  const store = getCredentialsStore()
-  const oauth = store.get('oauth')
-  oauth.configs[provider] = config
-  store.set('oauth', oauth)
-}
-
-export function getOAuthConfig(provider: OAuthProvider): OAuthConfig | undefined {
-  const oauth = getCredentialsStore().get('oauth')
-  return oauth.configs[provider]
-}
-
-export function saveOAuthTokens(email: string, provider: OAuthProvider, tokens: OAuthTokens): void {
-  const store = getCredentialsStore()
-  const oauth = store.get('oauth')
-  // 토큰 암호화 후 저장
-  const encryptedTokens = encryptOAuthTokens(tokens)
-  oauth.tokens[email] = { provider, tokens: encryptedTokens }
-  store.set('oauth', oauth)
-}
-
-export function getOAuthTokens(
-  email: string
-): { provider: OAuthProvider; tokens: OAuthTokens } | undefined {
-  const oauth = getCredentialsStore().get('oauth')
-  const stored = oauth.tokens[email]
-  if (!stored) return undefined
-
-  // 토큰 복호화 후 반환
-  // 기존 평문 데이터도 호환되도록 처리
-  const decryptedTokens = decryptOAuthTokens(stored.tokens)
-
-  // 기존 평문 데이터인 경우 암호화하여 다시 저장
-  if (!isEncrypted(stored.tokens.accessToken)) {
-    const store = getCredentialsStore()
-    const oauthStore = store.get('oauth')
-    oauthStore.tokens[email] = { provider: stored.provider, tokens: encryptOAuthTokens(stored.tokens) }
-    store.set('oauth', oauthStore)
-  }
-
-  return { provider: stored.provider, tokens: decryptedTokens }
-}
-
-export function deleteOAuthTokens(email: string): void {
-  const store = getCredentialsStore()
-  const oauth = store.get('oauth')
-  delete oauth.tokens[email]
-  store.set('oauth', oauth)
-}
-
-export function isOAuthAccount(email: string): boolean {
-  const oauth = getCredentialsStore().get('oauth')
-  return !!oauth.tokens[email]
-}
-
-// =====================================================
 // 클라우드 스토리지 함수
 // =====================================================
 
@@ -872,8 +759,8 @@ export function removeAccountSettings(accountEmail: string): void {
   store.set('accounts', accounts)
 }
 
-export function removeAccountCredentials(accountEmail: string): void {
-  deleteOAuthTokens(accountEmail)
+export function removeAccountCredentials(_accountEmail: string): void {
+  // 계정별 자격 증명 정리 (향후 확장용)
 }
 
 // =====================================================
@@ -889,10 +776,6 @@ export function clearAllData(): { success: boolean; error?: string } {
 
     // credentials 스토어 초기화 - defaults로 재설정
     const credentials = getCredentialsStore()
-    credentials.set('oauth', {
-      tokens: {},
-      configs: {}
-    })
     credentials.set('cloudStorage', {
       settings: {
         autoSelectByAccount: true,

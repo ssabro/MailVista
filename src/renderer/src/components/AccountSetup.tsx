@@ -14,25 +14,13 @@ import {
   ChevronRight,
   AlertCircle,
   HelpCircle,
-  Settings,
-  Key
+  Settings
 } from 'lucide-react'
 import { Button } from './ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter
-} from './ui/dialog'
-import { Input } from './ui/input'
-import { Label } from './ui/label'
 import { cn } from '@renderer/lib/utils'
 
 type Protocol = 'imap'
 type Step = 'welcome' | 'provider' | 'basic' | 'server' | 'testing' | 'complete'
-type AuthMethod = 'password' | 'oauth'
 
 interface AccountConfig {
   email: string
@@ -72,8 +60,6 @@ interface EmailProvider {
   appPasswordUrl?: string
   appPasswordGuide?: string[]
   notes?: string
-  supportsOAuth?: boolean
-  oauthProvider?: 'google' | 'microsoft'
 }
 
 // 정적 제공자 설정 (번역이 필요 없는 부분)
@@ -89,8 +75,6 @@ interface ProviderConfig {
   }
   requiresAppPassword: boolean
   appPasswordUrl?: string
-  supportsOAuth?: boolean // OAuth 지원 여부
-  oauthProvider?: 'google' | 'microsoft' // OAuth 제공자 타입
 }
 
 const providerConfigs: ProviderConfig[] = [
@@ -105,9 +89,7 @@ const providerConfigs: ProviderConfig[] = [
       outgoing: { host: 'smtp.gmail.com', port: 465, secure: true }
     },
     requiresAppPassword: true,
-    appPasswordUrl: 'https://myaccount.google.com/apppasswords',
-    supportsOAuth: true,
-    oauthProvider: 'google'
+    appPasswordUrl: 'https://myaccount.google.com/apppasswords'
   },
   {
     id: 'naver',
@@ -158,9 +140,7 @@ const providerConfigs: ProviderConfig[] = [
       outgoing: { host: 'smtp.office365.com', port: 587, secure: false }
     },
     requiresAppPassword: true,
-    appPasswordUrl: 'https://account.live.com/proofs/AppPassword',
-    supportsOAuth: true,
-    oauthProvider: 'microsoft'
+    appPasswordUrl: 'https://account.live.com/proofs/AppPassword'
   },
   {
     id: 'yahoo',
@@ -246,17 +226,6 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
     message?: string
   }>({ incoming: 'pending', outgoing: 'pending' })
 
-  // OAuth 관련 상태
-  const [authMethod, setAuthMethod] = React.useState<AuthMethod>('password')
-  const [oauthStatus, setOauthStatus] = React.useState<'idle' | 'loading' | 'success' | 'error'>(
-    'idle'
-  )
-  const [oauthError, setOauthError] = React.useState<string | null>(null)
-  const [showOAuthSetup, setShowOAuthSetup] = React.useState(false)
-  const [oauthClientId, setOauthClientId] = React.useState('')
-  const [oauthClientSecret, setOauthClientSecret] = React.useState('')
-  const [isSavingOAuth, setIsSavingOAuth] = React.useState(false)
-
   const [config, setConfig] = React.useState<AccountConfig>({
     email: '',
     password: '',
@@ -287,12 +256,6 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
   // 제공자 선택 시 설정 적용
   const selectProvider = (provider: EmailProvider | null) => {
     setSelectedProvider(provider)
-    // OAuth 지원 제공자면 기본 인증 방법을 OAuth로 설정
-    if (provider?.supportsOAuth) {
-      setAuthMethod('oauth')
-    } else {
-      setAuthMethod('password')
-    }
     if (provider) {
       setConfig((prev) => ({
         ...prev,
@@ -300,139 +263,6 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
         incoming: provider.config.incoming,
         outgoing: provider.config.outgoing
       }))
-    }
-  }
-
-  // OAuth 인증 시작
-  const startOAuthLogin = async () => {
-    if (!selectedProvider?.oauthProvider) return
-
-    setOauthStatus('loading')
-    setOauthError(null)
-
-    try {
-      const provider = selectedProvider.oauthProvider
-
-      // Google의 경우 내장 자격 증명 확인
-      if (provider === 'google') {
-        const hasEmbedded = await window.electron.ipcRenderer.invoke(
-          'oauth-has-embedded-credentials',
-          'google'
-        )
-
-        if (hasEmbedded) {
-          // 내장 자격 증명으로 OAuth 시작
-          const result = await window.electron.ipcRenderer.invoke('oauth-google-start-embedded')
-
-          if (result.success && result.email) {
-            setConfig((prev) => ({
-              ...prev,
-              email: result.email,
-              name: prev.name || result.email.split('@')[0]
-            }))
-            setOauthStatus('success')
-
-            setTimeout(() => {
-              setStep('server')
-            }, 1000)
-            return
-          } else {
-            setOauthError(result.error || t('account.setup.oauth.failed'))
-            setOauthStatus('error')
-            return
-          }
-        }
-      }
-
-      // 내장 자격 증명이 없는 경우: 사용자 설정 확인
-      const oauthConfig = await window.electron.ipcRenderer.invoke('oauth-get-config', provider)
-
-      if (!oauthConfig?.clientId || !oauthConfig?.clientSecret) {
-        // OAuth 설정이 없으면 설정 다이얼로그 표시
-        setOauthStatus('idle')
-        setShowOAuthSetup(true)
-        return
-      }
-
-      // 사용자 설정으로 OAuth 인증 시작
-      const channel = provider === 'google' ? 'oauth-google-start' : 'oauth-microsoft-start'
-
-      const result = await window.electron.ipcRenderer.invoke(
-        channel,
-        oauthConfig.clientId,
-        oauthConfig.clientSecret
-      )
-
-      if (result.success && result.email) {
-        // OAuth 성공 - 이메일 주소 설정
-        setConfig((prev) => ({
-          ...prev,
-          email: result.email,
-          name: prev.name || result.email.split('@')[0]
-        }))
-        setOauthStatus('success')
-
-        // 잠시 후 서버 설정 단계로 이동
-        setTimeout(() => {
-          setStep('server')
-        }, 1000)
-      } else {
-        setOauthError(result.error || t('account.setup.oauth.failed'))
-        setOauthStatus('error')
-      }
-    } catch (error) {
-      setOauthError(error instanceof Error ? error.message : t('account.setup.oauth.failed'))
-      setOauthStatus('error')
-    }
-  }
-
-  // OAuth 설정 저장 및 인증 시작
-  const saveOAuthConfigAndLogin = async () => {
-    if (!selectedProvider?.oauthProvider || !oauthClientId || !oauthClientSecret) return
-
-    setIsSavingOAuth(true)
-    try {
-      // OAuth 설정 저장
-      await window.electron.ipcRenderer.invoke(
-        'oauth-save-config',
-        selectedProvider.oauthProvider,
-        { clientId: oauthClientId, clientSecret: oauthClientSecret }
-      )
-
-      setShowOAuthSetup(false)
-
-      // 저장 후 OAuth 인증 시작
-      const channel =
-        selectedProvider.oauthProvider === 'google' ? 'oauth-google-start' : 'oauth-microsoft-start'
-
-      setOauthStatus('loading')
-
-      const result = await window.electron.ipcRenderer.invoke(
-        channel,
-        oauthClientId,
-        oauthClientSecret
-      )
-
-      if (result.success && result.email) {
-        setConfig((prev) => ({
-          ...prev,
-          email: result.email,
-          name: prev.name || result.email.split('@')[0]
-        }))
-        setOauthStatus('success')
-
-        setTimeout(() => {
-          setStep('server')
-        }, 1000)
-      } else {
-        setOauthError(result.error || t('account.setup.oauth.failed'))
-        setOauthStatus('error')
-      }
-    } catch (error) {
-      setOauthError(error instanceof Error ? error.message : t('account.setup.oauth.failed'))
-      setOauthStatus('error')
-    } finally {
-      setIsSavingOAuth(false)
     }
   }
 
@@ -484,60 +314,33 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
     setTestStatus({ incoming: 'testing', outgoing: 'pending' })
 
     try {
-      // OAuth 계정인 경우 access token 가져오기
-      let useOAuth = false
-      let accessToken: string | undefined // OAuth용 raw access token (IMAP/SMTP 공용)
-
-      if (authMethod === 'oauth' && selectedProvider?.oauthProvider) {
-        const tokenResult = await window.electron.ipcRenderer.invoke(
-          'oauth-get-xoauth2-token',
-          config.email
-        )
-        if (tokenResult.success && tokenResult.accessToken) {
-          useOAuth = true
-          accessToken = tokenResult.accessToken // raw access token (ImapFlow가 내부 처리)
-        } else {
-          setTestStatus({
-            incoming: 'error',
-            outgoing: 'pending',
-            message: tokenResult.error || t('account.setup.oauth.tokenFailed')
-          })
-          return
-        }
-      }
-
-      // Incoming server test (IMAP - uses accessToken)
+      // Incoming server test (IMAP)
       const incomingResult = await window.electron.ipcRenderer.invoke('test-mail-connection', {
         type: config.protocol,
         host: config.incoming.host,
         port: config.incoming.port,
         secure: config.incoming.secure,
         user: config.email,
-        password: config.password,
-        accessToken // ImapFlow는 raw accessToken 사용
+        password: config.password
       })
 
       if (incomingResult.success) {
         setTestStatus((prev) => ({ ...prev, incoming: 'success', outgoing: 'testing' }))
 
-        // Outgoing server test (SMTP - uses raw accessToken)
+        // Outgoing server test (SMTP)
         const outgoingResult = await window.electron.ipcRenderer.invoke('test-mail-connection', {
           type: 'smtp',
           host: config.outgoing.host,
           port: config.outgoing.port,
           secure: config.outgoing.secure,
           user: config.email,
-          password: config.password,
-          accessToken // SMTP도 raw access token 사용
+          password: config.password
         })
 
         if (outgoingResult.success) {
           setTestStatus((prev) => ({ ...prev, outgoing: 'success' }))
-          // Save account (OAuth 여부 포함)
-          await window.electron.ipcRenderer.invoke('save-account', {
-            ...config,
-            useOAuth
-          })
+          // Save account
+          await window.electron.ipcRenderer.invoke('save-account', config)
           setTimeout(() => setStep('complete'), 1000)
         } else {
           setTestStatus((prev) => ({
@@ -562,9 +365,7 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
     }
   }
 
-  // OAuth 인증 방식에서는 password가 필요 없음
-  const canProceedToServer =
-    config.email && config.name && (authMethod === 'oauth' || config.password)
+  const canProceedToServer = config.email && config.name && config.password
   const canTestConnection =
     config.incoming.host && config.incoming.port && config.outgoing.host && config.outgoing.port
 
@@ -764,123 +565,7 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
                 </p>
               </div>
 
-              {/* OAuth/Password 인증 방법 선택 */}
-              {selectedProvider?.supportsOAuth && (
-                <div className="space-y-3">
-                  <label className="block text-sm font-medium">
-                    {t('account.setup.oauth.authMethod')}
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setAuthMethod('oauth')}
-                      className={cn(
-                        'p-3 rounded-lg border-2 text-left transition-all',
-                        authMethod === 'oauth'
-                          ? 'border-primary bg-primary/5'
-                          : 'border-muted hover:border-primary/50'
-                      )}
-                    >
-                      <div className="font-medium text-sm">
-                        {t('account.setup.oauth.oauthLogin')}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {t('account.setup.oauth.oauthDesc')}
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAuthMethod('password')}
-                      className={cn(
-                        'p-3 rounded-lg border-2 text-left transition-all',
-                        authMethod === 'password'
-                          ? 'border-primary bg-primary/5'
-                          : 'border-muted hover:border-primary/50'
-                      )}
-                    >
-                      <div className="font-medium text-sm">
-                        {t('account.setup.oauth.passwordLogin')}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {t('account.setup.oauth.passwordDesc')}
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* OAuth 로그인 섹션 */}
-              {authMethod === 'oauth' && selectedProvider?.supportsOAuth && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1.5">
-                      {t('account.setup.displayName')}
-                    </label>
-                    <div className="relative">
-                      <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <input
-                        type="text"
-                        placeholder={t('account.setup.displayNamePlaceholder')}
-                        value={config.name}
-                        onChange={(e) => updateConfig({ name: e.target.value })}
-                        className="w-full h-11 pl-10 pr-4 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                      />
-                    </div>
-                  </div>
-
-                  {oauthStatus === 'success' ? (
-                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                      <div className="flex items-center gap-2 text-green-700">
-                        <CheckCircle2 className="h-5 w-5" />
-                        <div>
-                          <div className="font-medium">{t('account.setup.oauth.success')}</div>
-                          <div className="text-sm">{config.email}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <Button
-                        type="button"
-                        className="w-full h-12"
-                        onClick={startOAuthLogin}
-                        disabled={oauthStatus === 'loading' || !config.name}
-                      >
-                        {oauthStatus === 'loading' ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            {t('account.setup.oauth.authenticating')}
-                          </>
-                        ) : (
-                          <>
-                            <ExternalLink className="h-4 w-4 mr-2" />
-                            {t('account.setup.oauth.loginWith', {
-                              provider: selectedProvider?.name
-                            })}
-                          </>
-                        )}
-                      </Button>
-
-                      {oauthError && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                          <div className="flex items-center gap-2">
-                            <XCircle className="h-4 w-4 flex-shrink-0" />
-                            {oauthError}
-                          </div>
-                        </div>
-                      )}
-
-                      <p className="text-xs text-muted-foreground text-center">
-                        {t('account.setup.oauth.browserNote')}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* 비밀번호 로그인 섹션 */}
-              {(authMethod === 'password' || !selectedProvider?.supportsOAuth) && (
-                <div className="space-y-4">
+              <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium mb-1.5">
                       {t('account.setup.displayName')}
@@ -1011,7 +696,6 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
                     )}
                   </div>
                 </div>
-              )}
 
               <div className="flex gap-3">
                 <Button variant="outline" className="flex-1" onClick={() => setStep('provider')}>
@@ -1228,96 +912,6 @@ export function AccountSetup({ onComplete, onCancel, isAddingAccount = false }: 
           )}
         </div>
       </div>
-
-      {/* OAuth 설정 다이얼로그 */}
-      <Dialog open={showOAuthSetup} onOpenChange={setShowOAuthSetup}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Key className="h-5 w-5" />
-              {t('account.setup.oauth.setupTitle')}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedProvider?.oauthProvider === 'google'
-                ? t('account.setup.oauth.googleSetupDesc')
-                : t('account.setup.oauth.microsoftSetupDesc')}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="oauth-client-id">{t('account.setup.oauth.clientId')}</Label>
-              <Input
-                id="oauth-client-id"
-                value={oauthClientId}
-                onChange={(e) => setOauthClientId(e.target.value)}
-                placeholder={
-                  selectedProvider?.oauthProvider === 'google'
-                    ? 'xxxxxxxxx.apps.googleusercontent.com'
-                    : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-                }
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="oauth-client-secret">{t('account.setup.oauth.clientSecret')}</Label>
-              <Input
-                id="oauth-client-secret"
-                type="password"
-                value={oauthClientSecret}
-                onChange={(e) => setOauthClientSecret(e.target.value)}
-                placeholder="GOCSPX-xxxxxxxxx"
-              />
-            </div>
-
-            <div className="p-3 bg-muted rounded-lg text-xs space-y-2">
-              <p className="font-medium">{t('account.setup.oauth.howToGet')}</p>
-              {selectedProvider?.oauthProvider === 'google' ? (
-                <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                  <li>{t('account.setup.oauth.googleStep1')}</li>
-                  <li>{t('account.setup.oauth.googleStep2')}</li>
-                  <li>{t('account.setup.oauth.googleStep3')}</li>
-                  <li>{t('account.setup.oauth.googleStep4')}</li>
-                </ol>
-              ) : (
-                <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                  <li>{t('account.setup.oauth.microsoftStep1')}</li>
-                  <li>{t('account.setup.oauth.microsoftStep2')}</li>
-                  <li>{t('account.setup.oauth.microsoftStep3')}</li>
-                </ol>
-              )}
-              <p className="text-muted-foreground mt-2">
-                {t('account.setup.oauth.redirectUri')}:{' '}
-                <code className="bg-background px-1 rounded">
-                  http://localhost:8235/oauth/callback
-                </code>
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowOAuthSetup(false)}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              onClick={saveOAuthConfigAndLogin}
-              disabled={!oauthClientId || !oauthClientSecret || isSavingOAuth}
-            >
-              {isSavingOAuth ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  {t('account.setup.oauth.connecting')}
-                </>
-              ) : (
-                <>
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  {t('account.setup.oauth.saveAndLogin')}
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

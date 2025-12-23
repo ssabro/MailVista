@@ -5,12 +5,6 @@ import Store from 'electron-store'
 import { safeStorage } from 'electron'
 import { simpleParser } from 'mailparser'
 import { logger, LogCategory } from './logger'
-import {
-  isOAuthAccount,
-  getXOAuth2Token,
-  getOAuthProvider,
-  getOAuthServerConfig
-} from './oauth-service'
 
 // SQLite 저장소 모듈 import
 import { getStorageDatabase } from './storage/database'
@@ -37,7 +31,7 @@ import { getSpamSettings, isEmailBlocked } from './filters'
 // 분리된 모듈 re-export (기존 import 호환성 유지)
 // =====================================================
 
-// Account 모듈 - 타입만 re-export (함수는 OAuth 의존성으로 로컬 구현 사용)
+// Account 모듈 - 타입만 re-export
 export type { AccountConfig, StoredAccount, ServerConfig } from './account'
 
 // Settings 모듈
@@ -150,10 +144,6 @@ interface AccountConfig {
     port: number
     secure: boolean
   }
-  // OAuth 인증 관련
-  useOAuth?: boolean
-  xoauth2Token?: string   // IMAP용 XOAUTH2 토큰
-  accessToken?: string    // SMTP용 raw access token
 }
 
 interface StoredAccount {
@@ -1004,32 +994,21 @@ export async function testMailConnection(config: {
   secure: boolean
   user: string
   password: string
-  accessToken?: string  // OAuth 인증용 raw access token (IMAP/SMTP 공용)
 }): Promise<{ success: boolean; error?: string }> {
   if (config.type === 'imap') {
-    // OAuth 또는 비밀번호 인증
-    // ImapFlow는 raw accessToken을 받아 내부적으로 XOAUTH2 처리
-    // Gmail은 OAUTHBEARER를 지원하지 않으므로 비활성화하여 XOAUTH2 강제 사용
     const imapConfig = {
       host: config.host,
       port: config.port,
       secure: config.secure,
-      auth: config.accessToken
-        ? {
-            user: config.user,
-            accessToken: config.accessToken
-          }
-        : {
-            user: config.user,
-            pass: config.password
-          },
+      auth: {
+        user: config.user,
+        pass: config.password
+      },
       tls: {
         rejectUnauthorized: false
       },
       logger: false as const,
-      emitLogs: false,
-      // Gmail 등은 OAUTHBEARER를 지원하지 않으므로 XOAUTH2 강제 사용
-      disabledCapabilities: config.accessToken ? ['AUTH=OAUTHBEARER'] : []
+      emitLogs: false
     }
 
     const client = new ImapFlow(imapConfig)
@@ -1047,24 +1026,14 @@ export async function testMailConnection(config: {
     // 587, 25: STARTTLS 사용 (secure: false)
     const useSecure = config.port === 465
 
-    // OAuth 또는 비밀번호 인증
-    // SMTP는 raw access token 사용 (xoauth2Token이 아닌 accessToken)
-    const auth = config.accessToken
-      ? {
-          type: 'OAuth2' as const,
-          user: config.user,
-          accessToken: config.accessToken
-        }
-      : {
-          user: config.user,
-          pass: config.password
-        }
-
     const transporter = nodemailer.createTransport({
       host: config.host,
       port: config.port,
       secure: useSecure,
-      auth,
+      auth: {
+        user: config.user,
+        pass: config.password
+      },
       connectionTimeout: 10000,
       tls: {
         rejectUnauthorized: false
@@ -1160,34 +1129,10 @@ export function getAccountWithPassword(email: string): AccountConfig | null {
 }
 
 /**
- * OAuth 지원 비동기 버전 - OAuth 계정인 경우 XOAUTH2 토큰을 포함
+ * 비동기 버전 - 비밀번호를 포함한 계정 정보 조회
  */
 export async function getAccountWithPasswordAsync(email: string): Promise<AccountConfig | null> {
-  const account = getAccountWithPassword(email)
-  if (!account) return null
-
-  // OAuth 계정인지 확인
-  if (isOAuthAccount(email)) {
-    const provider = getOAuthProvider(email)
-    if (provider) {
-      // OAuth 서버 설정 적용
-      const serverConfig = getOAuthServerConfig(provider)
-      account.incoming = serverConfig.imap
-      account.outgoing = serverConfig.smtp
-
-      // XOAUTH2 토큰 가져오기
-      const tokenResult = await getXOAuth2Token(email)
-      if (tokenResult.success && tokenResult.token) {
-        account.useOAuth = true
-        account.xoauth2Token = tokenResult.token      // IMAP용
-        account.accessToken = tokenResult.accessToken // SMTP용
-        // OAuth의 경우 password는 사용되지 않음
-        account.password = ''
-      }
-    }
-  }
-
-  return account
+  return getAccountWithPassword(email)
 }
 
 export function deleteAccount(email: string): { success: boolean } {
@@ -1431,31 +1376,22 @@ class ImapConnectionPool {
 
   // 새 연결 생성
   private async createConnection(account: AccountConfig): Promise<PooledConnection> {
-    // OAuth 또는 비밀번호 인증에 따라 ImapFlow 설정 구성
-    // ImapFlow는 raw accessToken을 받아 내부적으로 XOAUTH2 처리
     const imapConfig = {
       host: account.incoming.host,
       port: account.incoming.port,
       secure: account.incoming.secure,
-      auth: account.useOAuth && account.accessToken
-        ? {
-            user: account.email,
-            accessToken: account.accessToken
-          }
-        : {
-            user: account.email,
-            pass: account.password
-          },
+      auth: {
+        user: account.email,
+        pass: account.password
+      },
       tls: {
         rejectUnauthorized: false
       },
       logger: false as const,
-      emitLogs: false,
-      // Gmail 등은 OAUTHBEARER를 지원하지 않으므로 XOAUTH2 강제 사용
-      disabledCapabilities: account.useOAuth && account.accessToken ? ['AUTH=OAUTHBEARER'] : []
+      emitLogs: false
     }
 
-    console.log(`[Pool] Creating IMAP connection for ${account.email} (OAuth: ${!!account.useOAuth})`)
+    console.log(`[Pool] Creating IMAP connection for ${account.email}`)
     const client = new ImapFlow(imapConfig)
 
     const pooledConn: PooledConnection = {
@@ -1585,27 +1521,19 @@ export function destroyConnectionPool(): void {
 
 // IMAP 연결 생성 헬퍼 (기존 코드 호환용 - 연결 풀을 사용하지 않는 경우)
 async function createImapConnection(account: AccountConfig): Promise<ImapFlow> {
-  // ImapFlow는 raw accessToken을 받아 내부적으로 XOAUTH2 처리
   const config = {
     host: account.incoming.host,
     port: account.incoming.port,
     secure: account.incoming.secure,
-    auth: account.useOAuth && account.accessToken
-      ? {
-          user: account.email,
-          accessToken: account.accessToken
-        }
-      : {
-          user: account.email,
-          pass: account.password
-        },
+    auth: {
+      user: account.email,
+      pass: account.password
+    },
     tls: {
       rejectUnauthorized: false
     },
     logger: false as const,
-    emitLogs: false,
-    // Gmail 등은 OAUTHBEARER를 지원하지 않으므로 XOAUTH2 강제 사용
-    disabledCapabilities: account.useOAuth && account.accessToken ? ['AUTH=OAUTHBEARER'] : []
+    emitLogs: false
   }
 
   const client = new ImapFlow(config)
@@ -2247,7 +2175,6 @@ export async function sendEmail(
     })
   )
 
-  // OAuth 지원을 위해 비동기 버전 사용
   const account = await getAccountWithPasswordAsync(email)
   if (!account) {
     console.error('[sendEmail] Account not found:', email)
@@ -2257,8 +2184,7 @@ export async function sendEmail(
   console.log('[sendEmail] SMTP config:', {
     host: account.outgoing.host,
     port: account.outgoing.port,
-    secure: account.outgoing.secure,
-    useOAuth: account.useOAuth
+    secure: account.outgoing.secure
   })
 
   return new Promise((resolve) => {
@@ -2267,23 +2193,14 @@ export async function sendEmail(
     // 587, 25: STARTTLS 사용 (secure: false)
     const useSecure = account.outgoing.port === 465
 
-    // OAuth 또는 비밀번호 인증
-    const auth = account.useOAuth && account.accessToken
-      ? {
-          type: 'OAuth2' as const,
-          user: account.email,
-          accessToken: account.accessToken
-        }
-      : {
-          user: account.email,
-          pass: account.password
-        }
-
     const transporter = nodemailer.createTransport({
       host: account.outgoing.host,
       port: account.outgoing.port,
       secure: useSecure,
-      auth,
+      auth: {
+        user: account.email,
+        pass: account.password
+      },
       tls: {
         rejectUnauthorized: false
       },

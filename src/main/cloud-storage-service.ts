@@ -12,11 +12,6 @@ import {
   type CloudCredentials,
   type CloudStorageSettings
 } from './settings/unified-config'
-import {
-  getOAuthTokens,
-  isOAuthAccount,
-  getXOAuth2Token
-} from './oauth-service'
 
 // Re-export types
 export type { CloudProvider, CloudCredentials, CloudStorageSettings }
@@ -446,52 +441,31 @@ export async function uploadToTransferSh(
 }
 
 // =====================================================
-// Google Drive 업로드 (Gmail OAuth 토큰 재사용)
+// Google Drive 업로드 (OAuth 제거로 비활성화)
 // =====================================================
 
 /**
- * Gmail 계정의 OAuth 토큰으로 Google Drive 접근 가능 여부 확인
+ * Google Drive 접근 가능 여부 확인 - OAuth 제거로 항상 false
  */
-export function canUseGoogleDrive(accountEmail: string): boolean {
-  if (!isOAuthAccount(accountEmail)) {
-    return false
-  }
-  const tokens = getOAuthTokens(accountEmail)
-  return tokens?.provider === 'google'
-}
-
-/**
- * Gmail OAuth 토큰에서 유효한 access token 가져오기
- */
-async function getGoogleAccessToken(accountEmail: string): Promise<string | null> {
-  try {
-    const result = await getXOAuth2Token(accountEmail)
-    if (result.success && result.accessToken) {
-      return result.accessToken
-    }
-    logger.error(LogCategory.EXPORT, 'Failed to get Google access token', {
-      email: accountEmail,
-      error: result.error
-    })
-    return null
-  } catch (error) {
-    logger.error(LogCategory.EXPORT, 'Error getting Google access token', {
-      email: accountEmail,
-      error: error instanceof Error ? error.message : String(error)
-    })
-    return null
-  }
-}
-
-// 기존 startGoogleAuth 함수는 더 이상 필요 없음 (Gmail OAuth로 대체)
-// 하지만 하위 호환성을 위해 빈 함수로 유지
-export async function startGoogleAuth(_clientId: string, _clientSecret: string): Promise<boolean> {
-  logger.warn(LogCategory.APP, 'startGoogleAuth is deprecated - use Gmail OAuth instead')
+export function canUseGoogleDrive(_accountEmail: string): boolean {
   return false
 }
 
 /**
- * Google Drive에 파일 업로드 (Gmail OAuth 토큰 사용)
+ * Google access token 가져오기 - OAuth 제거로 항상 null
+ */
+async function getGoogleAccessToken(_accountEmail: string): Promise<string | null> {
+  return null
+}
+
+// 하위 호환성을 위해 빈 함수로 유지
+export async function startGoogleAuth(_clientId: string, _clientSecret: string): Promise<boolean> {
+  logger.warn(LogCategory.APP, 'startGoogleAuth is deprecated')
+  return false
+}
+
+/**
+ * Google Drive에 파일 업로드 - OAuth 제거로 항상 실패
  */
 export async function uploadToGoogleDrive(
   filePath: string,
@@ -505,7 +479,6 @@ export async function uploadToGoogleDrive(
     accountEmail
   })
 
-  // Gmail OAuth 토큰 확인
   if (!accountEmail) {
     return {
       success: false,
@@ -517,18 +490,19 @@ export async function uploadToGoogleDrive(
     }
   }
 
+  // OAuth 제거로 Google Drive는 사용 불가
   if (!canUseGoogleDrive(accountEmail)) {
     return {
       success: false,
       provider: 'google-drive',
       fileName: actualFileName,
       fileSize: 0,
-      error: 'This account does not support Google Drive (not a Gmail OAuth account)',
+      error: 'Google Drive is not available',
       errorCode: 'AUTH_REQUIRED'
     }
   }
 
-  // Gmail OAuth 토큰에서 access token 가져오기 (자동 갱신 포함)
+  // access token 가져오기
   const accessToken = await getGoogleAccessToken(accountEmail)
   if (!accessToken) {
     return {
@@ -764,9 +738,9 @@ export async function uploadLargeFile(
     fileName: fileName || path.basename(filePath)
   })
 
-  // Google Drive는 Gmail OAuth 계정 여부로 판단
+  // Google Drive 사용 가능 여부 확인
   if (provider === 'google-drive' && !canUseGoogleDrive(accountEmail)) {
-    logger.info(LogCategory.EXPORT, 'Gmail OAuth not available, falling back to Transfer.sh', {
+    logger.info(LogCategory.EXPORT, 'Google Drive not available, falling back to Transfer.sh', {
       accountEmail
     })
     provider = 'transfer-sh'

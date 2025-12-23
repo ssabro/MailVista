@@ -17,10 +17,6 @@ export interface AccountConfig {
   protocol: 'imap'
   incoming: ServerConfig
   outgoing: ServerConfig
-  // OAuth 인증 관련
-  useOAuth?: boolean
-  xoauth2Token?: string // IMAP용 XOAUTH2 토큰
-  accessToken?: string // SMTP용 raw access token
 }
 
 // 저장된 계정 정보 (비밀번호 암호화됨 - 저장용)
