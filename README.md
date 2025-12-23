@@ -16,8 +16,7 @@ Electron, React, TypeScript로 만든 현대적이고 안전한 데스크톱 이
 
 ### Core Email Functions
 - **Multi-Account Support** - Manage multiple email accounts (Gmail, Outlook, Naver, Kakao, Yahoo, iCloud, etc.)
-- **OAuth Authentication** - Secure login with Google and Microsoft OAuth
-- **IMAP/SMTP** - Full IMAP and SMTP protocol support
+- **IMAP/SMTP** - Full IMAP and SMTP protocol support with app password authentication
 - **Rich Text Compose** - HTML email composition with rich text editor
 - **Attachments** - Send and receive attachments with drag & drop support
 - **Search** - Full-text search with advanced filters (sender, date, attachments, etc.)
@@ -53,7 +52,7 @@ Electron, React, TypeScript로 만든 현대적이고 안전한 데스크톱 이
 
 ### Integration
 - **Trello** - Create Trello cards from emails
-- **Large File Upload** - Google Drive, Transfer.sh integration
+- **Large File Upload** - Transfer.sh integration for large attachments
 
 ### User Experience
 - **Multi-Language** - Korean, English, Japanese, Chinese
@@ -203,24 +202,6 @@ mailvista/
 Most providers require IMAP to be enabled and may require an app-specific password.
 
 ## Configuration
-
-### OAuth Setup (Optional)
-
-For OAuth authentication with Google/Microsoft, you need to set up your own OAuth credentials:
-
-1. **Google OAuth**
-   - Go to [Google Cloud Console](https://console.cloud.google.com)
-   - Create a new project
-   - Enable Gmail API
-   - Create OAuth 2.0 credentials (Desktop app)
-   - Enter Client ID and Secret in MailVista settings
-
-2. **Microsoft OAuth**
-   - Go to [Azure Portal](https://portal.azure.com)
-   - Register a new application
-   - Add redirect URI
-   - Create client secret
-   - Enter credentials in MailVista settings
 
 ### AI Features (Optional)
 
